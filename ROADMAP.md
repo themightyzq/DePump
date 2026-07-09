@@ -1,9 +1,6 @@
 # DePump Roadmap
 
 ## Next
-- Scaffold CMake + JUCE 8 project (AU + VST3, universal binary); fill in
-  CLAUDE.md "Build & test commands" and the build-and-validate skill with
-  verified commands.
 - Build the offline render harness (see .claude/skills/offline-render-harness).
 - MVP algorithm: user-guided inverse envelope (tempo-synced rate, depth,
   dip shape, phase offset) — the mirror image of pump generators.
@@ -15,7 +12,10 @@
 - Few-band (3–4) variant for multiband-sidechained material.
 - Headroom management / max-boost ceiling to avoid amplifying
   AI-separation artifacts in the dips.
-- CI, code-signing + notarization (deferred until distribution).
+- CI; notarization (deferred until distribution — code signing itself is
+  already part of every build, required for Soundminer).
+- Soundminer install: signed VST3 into /Library/Audio/Plug-Ins/VST3/
+  (manual sudo step).
 
 ## Deferred hygiene log
 (Log deferrable repo-hygiene items here per CLAUDE.md; none yet.)

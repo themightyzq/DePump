@@ -15,18 +15,40 @@ AudioProcessorEditor (message thread) stay strictly separated. This
 outranks convenience and idiomatic C++ everywhere it applies.
 
 ## Targets & toolchain (decided by owner, 2026-07-09)
-- Formats: AU + VST3. Platform: macOS only. Universal binary
-  (arm64 + x86_64).
+- Formats: VST3 (primary — must stay Soundminer-compatible), AU,
+  Standalone. Platform: macOS only. Universal binary (arm64 + x86_64).
 - Build: CMake + JUCE 8 (pinned via CMake FetchContent), C++20,
   Xcode clang. No Projucer.
 - Versioning: semver, 0.x until first usable release.
-- Distribution: personal/local use for now; code-signing and
-  notarization deferred until distribution is planned.
+- Code signing with "Developer ID Application: ZQ SFX
+  (TEAMID)" is part of every release build — Soundminer will not
+  load unsigned plugins. Notarization deferred until distribution.
 
-## Build & test commands
-No code exists yet. The scaffold session must fill this section with
-commands verified to actually run, and remove this notice. Do not
-invent commands that have not been executed.
+## Soundminer compatibility (binding; owner-supplied, 2026-07-09)
+Source: Project_HyperPrism/VST3_SOUNDMINER_SETUP.md. Never remove:
+- Compile definitions: JUCE_WEB_BROWSER=0, JUCE_USE_CURL=0,
+  JUCE_VST3_CAN_REPLACE_VST2=0, JUCE_DISPLAY_SPLASH_SCREEN=0,
+  JUCE_REPORT_APP_USAGE=0; on macOS also JUCE_JACK=0, JUCE_ALSA=0.
+- juce_add_plugin: IS_SYNTH FALSE, NEEDS_MIDI_INPUT/OUTPUT FALSE,
+  IS_MIDI_EFFECT FALSE, EDITOR_WANTS_KEYBOARD_FOCUS FALSE.
+- Vendor identity: COMPANY_NAME "ZQ SFX", PLUGIN_MANUFACTURER_CODE
+  ZQFX (matches HyperPrism); PLUGIN_CODE Dpmp is DePump's unique code.
+- All automatable parameters live in APVTS with unique IDs.
+- Soundminer scans /Library/Audio/Plug-Ins/VST3/ — installing there
+  needs sudo and is a manual user step; builds auto-copy to the
+  user-level ~/Library/Audio/Plug-Ins/ folders.
+
+## Build & test commands (verified 2026-07-09)
+- Configure: `cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"`
+- Build: `cmake --build build --config Release -j"$(sysctl -n hw.ncpu)"`
+- Unit tests: `build/DePumpTests_artefacts/Release/DePumpTests`
+- Sign (build auto-copies UNSIGNED to ~/Library/Audio/Plug-Ins — sign
+  the installed copies after every build):
+  `codesign --force --deep --timestamp --sign "Developer ID Application: ZQ SFX (TEAMID)" <plugin-path>`
+- Validate: `/Applications/pluginval.app/Contents/MacOS/pluginval --strictness-level 10 --validate <plugin-path>`
+  (for AU, run `killall -9 AudioComponentRegistrar` first if stale)
+- Artifacts: `build/DePump_artefacts/Release/{VST3,AU,Standalone}`
+The `build-and-validate` skill runs this whole sequence.
 
 ## Definition of done (decided by owner, 2026-07-09)
 A change is done when: unit tests pass; pluginval at strictness 10

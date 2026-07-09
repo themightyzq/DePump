@@ -1,26 +1,72 @@
 ---
 name: build-and-validate
-description: Build DePump (CMake, AU + VST3, universal binary) and validate with pluginval strictness 10. Use whenever a change needs the definition-of-done build/validation gates run, or the user asks to build, rebuild, or validate the plugin.
+description: Build DePump (CMake, VST3 + AU + Standalone, universal binary), sign the installed plugins, and validate with pluginval strictness 10. Use whenever a change needs the definition-of-done build/validation gates run, or the user asks to build, rebuild, validate, or install the plugin.
 ---
 
 # Build and Validate
 
-> STUB — this project is not scaffolded yet. The scaffold session must
-> replace this stub with commands it has actually executed and verified,
-> per CLAUDE.md "Build & test commands". Do not run the placeholders
-> below as if they were real.
+All commands below were verified working on 2026-07-09. Run from the repo
+root. Report actual gate results — never claim a gate passed without output.
 
-## Intended playbook (to be verified at scaffold time)
+## 1. Configure (only needed once, or after CMakeLists changes)
 
-1. Configure: `cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"`
-2. Build: `cmake --build build --config Release`
-3. Run unit tests: (test target TBD)
-4. pluginval, strictness 10, against both formats:
-   - VST3: `pluginval --strictness-level 10 --validate <path-to>.vst3`
-   - AU: `pluginval --strictness-level 10 --validate <path-to>.component`
-     (AU may require the component installed to `~/Library/Audio/Plug-Ins/Components` and a `killall -9 AudioComponentRegistrar` first)
-5. Report which gates ran and their actual results — never claim a gate passed without output.
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+```
 
-## Artifact locations (fill in at scaffold time)
+## 2. Build (long — run in background)
 
-- Built plugins: TBD (typically `build/DePump_artefacts/Release/`)
+```bash
+cmake --build build --config Release -j"$(sysctl -n hw.ncpu)"
+```
+
+Build auto-copies plugins (UNSIGNED) to `~/Library/Audio/Plug-Ins/VST3/`
+and `~/Library/Audio/Plug-Ins/Components/`.
+
+## 3. Unit tests
+
+```bash
+build/DePumpTests_artefacts/Release/DePumpTests
+```
+
+## 4. Sign installed copies (required — Soundminer won't load unsigned)
+
+```bash
+IDENTITY="Developer ID Application: ZQ SFX (TEAMID)"
+codesign --force --deep --timestamp --sign "$IDENTITY" "$HOME/Library/Audio/Plug-Ins/VST3/DePump.vst3"
+codesign --force --deep --timestamp --sign "$IDENTITY" "$HOME/Library/Audio/Plug-Ins/Components/DePump.component"
+codesign -v "$HOME/Library/Audio/Plug-Ins/VST3/DePump.vst3"
+codesign -v "$HOME/Library/Audio/Plug-Ins/Components/DePump.component"
+```
+
+## 5. pluginval, strictness 10, both formats
+
+```bash
+/Applications/pluginval.app/Contents/MacOS/pluginval --strictness-level 10 --validate "$HOME/Library/Audio/Plug-Ins/VST3/DePump.vst3"
+killall -9 AudioComponentRegistrar 2>/dev/null
+/Applications/pluginval.app/Contents/MacOS/pluginval --strictness-level 10 --validate "$HOME/Library/Audio/Plug-Ins/Components/DePump.component"
+```
+
+Both must end with `SUCCESS`.
+
+## 6. Verify universal binary (after CMake/toolchain changes)
+
+```bash
+file build/DePump_artefacts/Release/VST3/DePump.vst3/Contents/MacOS/DePump
+# must show both x86_64 and arm64
+```
+
+## Soundminer system install (manual user step — needs sudo)
+
+Soundminer scans the SYSTEM folder. After signing, the user runs:
+
+```bash
+sudo cp -R "$HOME/Library/Audio/Plug-Ins/VST3/DePump.vst3" /Library/Audio/Plug-Ins/VST3/
+```
+
+Suggest they type it with a `!` prefix in the prompt; do not run sudo yourself.
+
+## Artifact locations
+
+- `build/DePump_artefacts/Release/{VST3,AU,Standalone}` (unsigned)
+- `~/Library/Audio/Plug-Ins/VST3/DePump.vst3`, `~/Library/Audio/Plug-Ins/Components/DePump.component` (signed after step 4)
