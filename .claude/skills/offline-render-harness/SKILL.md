@@ -33,6 +33,23 @@ depump_render --in X.wav [--out Y.wav] [--envelope Z.csv] \
 - `--envelope` writes RMS envelope CSV (20 ms window / 5 ms hop,
   `time_sec,rms_db`).
 
+## Automatic analysis and recovery (analysis core v1)
+
+```bash
+depump_render --in pumped.wav --auto --out recovered.wav [--amount 0..1]
+```
+
+Prints detection verdict, confidence, period/depth/dip, and the fitted
+one-pole model parameters (or "model fit: rejected" when the measured
+template is used directly). No tempo input needed. Clean audio is
+detected as unpumped and passed through bit-identically.
+
+Full-matrix regression (81 fixtures, ~8 min):
+
+```bash
+tools/render/matrix_sweep.sh [workdir]   # exit 0 iff all within 0.5 dB
+```
+
 ## Compare envelopes (scriptable pass/fail)
 
 ```bash

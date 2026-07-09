@@ -12,10 +12,19 @@ over — tempo-free operation is now core design rather than a fix.
 1. ~~Offline render harness / engine CLI~~ DONE 2026-07-09
    (depump_render; known-profile recovery verified to 1e-07 dB residual
    on synthetic fixtures — see .claude/skills/offline-render-harness).
-2. Analysis core v1 (fully automatic, no tempo input): envelope
-   autocorrelation → pump period; cycle folding → median dip template +
-   phase; time-varying tracking for drift. Measured against fixtures:
-   recovered output within a stated dB tolerance of the clean original.
+2. Analysis core v1 (fully automatic, no tempo input) — LARGELY DONE
+   2026-07-09, acceptance bar partially met: pipeline is autocorrelation
+   + comb fundamental selection → fold-coherence period refinement →
+   median-folded template → one-pole model fit → corrected-audio polish
+   (multi-start coordinate descent on the real signal). Matrix sweep
+   (81 fixtures, tools/render/matrix_sweep.sh): 59/81 strictly within
+   0.5 dB of clean; 12 between 0.5-0.7; worst 1.58 dB (deep 12 dB dips,
+   from 3-12 dB of original pumping — >90% reduction everywhere).
+   Do-no-harm and too-short-input guards verified. Remaining gap is
+   fit/edge precision on deep dips — candidates: better phase init for
+   the polish, sample-domain edge refinement, longer analysis windows
+   per rate. Decide: re-baseline v1 bar vs. continue in v1.1 alongside
+   drift tracking.
 3. Recovery core v1: apply the inverse of the estimated gain curve with
    Amount scaling, headroom management/true-peak ceiling, output trim.
 4. Batch CLI: process a folder of stems non-destructively (suffix or

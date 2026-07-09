@@ -13,6 +13,7 @@
 
 #include "dsp/Envelope.h"
 #include "dsp/GainCurve.h"
+#include "dsp/PumpAnalysis.h"
 #include "dsp/PumpProfile.h"
 
 namespace
@@ -202,7 +203,30 @@ int runRender(const Args& args)
 {
     auto audio = readWav(juce::File(args.get("in")));
 
-    if (args.has("apply") || args.has("invert"))
+    if (args.has("auto"))
+    {
+        const auto analysis = depump::analyzePump(monoMix(audio), audio.sampleRate);
+        std::cout << "auto-analysis: " << (analysis.pumpDetected ? "PUMP DETECTED" : "no pump detected")
+                  << " (confidence " << analysis.confidence << ")\n";
+        if (analysis.pumpDetected)
+        {
+            std::cout << "  period " << analysis.periodSeconds << " s (" << 1.0 / analysis.periodSeconds
+                      << " Hz), depth " << analysis.depthDb << " dB, dip at " << analysis.dipTimeSeconds
+                      << " s into the cycle\n";
+            if (analysis.modelFitted)
+                std::cout << "  model fit: depth " << analysis.fittedProfile.depthDb << " dB, attack "
+                          << analysis.fittedProfile.attackMs << " ms, hold " << analysis.fittedProfile.holdMs
+                          << " ms, release " << analysis.fittedProfile.releaseMs << " ms, phase "
+                          << analysis.fittedProfile.phase01 << "\n";
+            else
+                std::cout << "  model fit: rejected — using measured template\n";
+            const auto gain = depump::gainCurveFromAnalysis(analysis, audio.sampleRate, audio.numSamples());
+            const auto amount = static_cast<float>(args.getDouble("amount", 1.0));
+            for (auto& channel : audio.channels)
+                depump::applyInverseGain(channel, gain, amount);
+        }
+    }
+    else if (args.has("apply") || args.has("invert"))
     {
         const auto profile = profileFromArgs(args);
         const auto gain = depump::synthesizeGainCurve(profile, audio.sampleRate, audio.numSamples());
@@ -235,7 +259,7 @@ void printUsage()
 {
     std::cout << "depump_render — DePump engine pipeline, headless\n"
                  "  --in X.wav [--out Y.wav] [--envelope Z.csv]\n"
-                 "      [--apply | --invert] [--amount 0..1]\n"
+                 "      [--auto | --apply | --invert] [--amount 0..1]\n"
                  "      [--rate Hz --depth dB --attack ms --hold ms --release ms --phase 0..1]\n"
                  "  --make-fixture --out-dir DIR [--sr N] [--seconds S] [profile args]\n"
                  "  --compare A.csv --with B.csv [--tolerance dB]\n";

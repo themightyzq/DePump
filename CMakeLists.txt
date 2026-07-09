@@ -69,6 +69,7 @@ target_link_libraries(DePump
 set(DEPUMP_DSP_SOURCES
     src/dsp/GainCurve.cpp
     src/dsp/Envelope.cpp
+    src/dsp/PumpAnalysis.cpp
 )
 
 # --- Engine CLI: headless driver of the product pipeline ---
@@ -93,6 +94,7 @@ juce_add_console_app(DePumpTests PRODUCT_NAME "DePumpTests")
 target_sources(DePumpTests PRIVATE
     tests/DePumpTests.cpp
     tests/DspTests.cpp
+    tests/AnalysisTests.cpp
     src/PluginProcessor.cpp
     ${DEPUMP_DSP_SOURCES}
 )
