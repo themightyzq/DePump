@@ -1,0 +1,20 @@
+# Build output
+build/
+cmake-build-*/
+
+# macOS
+.DS_Store
+
+# IDE / editor
+.vscode/
+.idea/
+*.xcworkspace/xcuserdata/
+xcuserdata/
+
+# Claude Code local state
+.claude/settings.local.json
+.remember/
+
+# Audio scratch (keep committed fixtures in tests/fixtures/ only)
+*.wav
+!tests/fixtures/*.wav
