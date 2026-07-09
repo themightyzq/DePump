@@ -20,15 +20,21 @@ over — tempo-free operation is now core design rather than a fix.
    (81 fixtures, tools/render/matrix_sweep.sh): 59/81 strictly within
    0.5 dB of clean; 12 between 0.5-0.7; worst 1.58 dB (deep 12 dB dips,
    from 3-12 dB of original pumping — >90% reduction everywhere).
-   Do-no-harm and too-short-input guards verified. Remaining gap is
-   fit/edge precision on deep dips — candidates: better phase init for
-   the polish, sample-domain edge refinement, longer analysis windows
-   per rate. Decide: re-baseline v1 bar vs. continue in v1.1 alongside
-   drift tracking.
-3. Recovery core v1: apply the inverse of the estimated gain curve with
-   Amount scaling, headroom management/true-peak ceiling, output trim.
-4. Batch CLI: process a folder of stems non-destructively (suffix or
-   output dir) — immediately useful before any GUI exists.
+   Do-no-harm and too-short-input guards verified. V1 bar re-baselined
+   (owner-approved 2026-07-09): >=59/81 strictly within 0.5 dB + hard
+   cap 1.8 dB, encoded in matrix_sweep.sh; 0.5-everywhere is the v1.1
+   stretch alongside drift tracking (candidates: better phase init,
+   sample-domain edge refinement; attempted and rejected on evidence:
+   slope-weighted objective — trades flat-region observability).
+3. ~~Recovery core v1~~ DONE 2026-07-09: Amount scaling + trimToCeiling
+   headroom guard (identical per-channel scale, trim reported in dB).
+   Robustness verified on program-varying material (musical swells +
+   noise bed): recovery <=1.0 dB max / <=0.25 rms; do-no-harm holds.
+4. ~~Batch CLI~~ DONE 2026-07-09: `depump_render --batch IN --out-dir
+   OUT` — auto-recovers every wav/aiff, passes unpumped files through
+   bit-identically, skips unreadable files with per-file errors,
+   refuses in-place writes. Verified on a mixed folder; batch outputs
+   measured 0.33-0.38 dB from clean.
 5. GUI app v1: drop files/folder, waveform + detected-pump overlay
    (REVIEW-UX #2), A/B preview, per-file confidence readout, batch
    queue, render.

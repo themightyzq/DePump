@@ -199,32 +199,83 @@ int runCompare(const Args& args)
     return 0;
 }
 
+// Analyze + recover one file in place. Returns the analysis for reporting.
+depump::PumpAnalysis autoRecover(AudioFile& audio, float amount, std::ostream& log)
+{
+    const auto analysis = depump::analyzePump(monoMix(audio), audio.sampleRate);
+    log << "auto-analysis: " << (analysis.pumpDetected ? "PUMP DETECTED" : "no pump detected")
+        << " (confidence " << analysis.confidence << ")\n";
+    if (analysis.pumpDetected)
+    {
+        log << "  period " << analysis.periodSeconds << " s (" << 1.0 / analysis.periodSeconds
+            << " Hz), depth " << analysis.depthDb << " dB, dip at " << analysis.dipTimeSeconds
+            << " s into the cycle\n";
+        if (analysis.modelFitted)
+            log << "  model fit: depth " << analysis.fittedProfile.depthDb << " dB, attack "
+                << analysis.fittedProfile.attackMs << " ms, hold " << analysis.fittedProfile.holdMs
+                << " ms, release " << analysis.fittedProfile.releaseMs << " ms, phase "
+                << analysis.fittedProfile.phase01 << "\n";
+        else
+            log << "  model fit: rejected — using measured template\n";
+
+        const auto gain = depump::gainCurveFromAnalysis(analysis, audio.sampleRate, audio.numSamples());
+        for (auto& channel : audio.channels)
+            depump::applyInverseGain(channel, gain, amount);
+
+        const float trimDb = depump::trimToCeiling(audio.channels);
+        if (trimDb < 0.0f)
+            log << "  output trimmed " << trimDb << " dB to keep peaks below full scale\n";
+    }
+    return analysis;
+}
+
+int runBatch(const Args& args)
+{
+    const juce::File inDir(args.get("batch"));
+    const juce::File outDir(args.get("out-dir"));
+    if (!inDir.isDirectory())
+        throw std::runtime_error("--batch requires an existing input directory");
+    if (args.get("out-dir").empty())
+        throw std::runtime_error("--batch requires --out-dir (output is never written in place)");
+    if (outDir == inDir)
+        throw std::runtime_error("--out-dir must differ from the input directory (non-destructive)");
+    outDir.createDirectory();
+
+    const auto amount = static_cast<float>(args.getDouble("amount", 1.0));
+    auto files = inDir.findChildFiles(juce::File::findFiles, false, "*.wav;*.aif;*.aiff");
+    files.sort();
+
+    int recovered = 0, untouched = 0, failed = 0;
+    for (const auto& file : files)
+    {
+        std::cout << "== " << file.getFileName() << "\n";
+        try
+        {
+            auto audio = readWav(file);
+            const auto analysis = autoRecover(audio, amount, std::cout);
+            writeWav(outDir.getChildFile(file.getFileName()), audio);
+            analysis.pumpDetected ? ++recovered : ++untouched;
+        }
+        catch (const std::exception& e)
+        {
+            std::cout << "  ERROR: " << e.what() << " — skipped\n";
+            ++failed;
+        }
+    }
+
+    std::cout << "batch done: " << recovered << " recovered, " << untouched
+              << " passed through unpumped, " << failed << " failed, into "
+              << outDir.getFullPathName() << "\n";
+    return failed == 0 ? 0 : 1;
+}
+
 int runRender(const Args& args)
 {
     auto audio = readWav(juce::File(args.get("in")));
 
     if (args.has("auto"))
     {
-        const auto analysis = depump::analyzePump(monoMix(audio), audio.sampleRate);
-        std::cout << "auto-analysis: " << (analysis.pumpDetected ? "PUMP DETECTED" : "no pump detected")
-                  << " (confidence " << analysis.confidence << ")\n";
-        if (analysis.pumpDetected)
-        {
-            std::cout << "  period " << analysis.periodSeconds << " s (" << 1.0 / analysis.periodSeconds
-                      << " Hz), depth " << analysis.depthDb << " dB, dip at " << analysis.dipTimeSeconds
-                      << " s into the cycle\n";
-            if (analysis.modelFitted)
-                std::cout << "  model fit: depth " << analysis.fittedProfile.depthDb << " dB, attack "
-                          << analysis.fittedProfile.attackMs << " ms, hold " << analysis.fittedProfile.holdMs
-                          << " ms, release " << analysis.fittedProfile.releaseMs << " ms, phase "
-                          << analysis.fittedProfile.phase01 << "\n";
-            else
-                std::cout << "  model fit: rejected — using measured template\n";
-            const auto gain = depump::gainCurveFromAnalysis(analysis, audio.sampleRate, audio.numSamples());
-            const auto amount = static_cast<float>(args.getDouble("amount", 1.0));
-            for (auto& channel : audio.channels)
-                depump::applyInverseGain(channel, gain, amount);
-        }
+        autoRecover(audio, static_cast<float>(args.getDouble("amount", 1.0)), std::cout);
     }
     else if (args.has("apply") || args.has("invert"))
     {
@@ -261,6 +312,8 @@ void printUsage()
                  "  --in X.wav [--out Y.wav] [--envelope Z.csv]\n"
                  "      [--auto | --apply | --invert] [--amount 0..1]\n"
                  "      [--rate Hz --depth dB --attack ms --hold ms --release ms --phase 0..1]\n"
+                 "  --batch IN_DIR --out-dir OUT_DIR [--amount 0..1]\n"
+                 "      auto-recover every wav/aiff, non-destructive\n"
                  "  --make-fixture --out-dir DIR [--sr N] [--seconds S] [profile args]\n"
                  "  --compare A.csv --with B.csv [--tolerance dB]\n";
 }
@@ -276,6 +329,8 @@ int main(int argc, char* argv[])
             return runMakeFixture(args);
         if (args.has("compare"))
             return runCompare(args);
+        if (args.has("batch"))
+            return runBatch(args);
         if (args.has("in"))
             return runRender(args);
         printUsage();

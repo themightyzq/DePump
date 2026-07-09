@@ -55,6 +55,23 @@ void applyGain(std::vector<float>& samples, const std::vector<float>& gain)
         samples[i] *= gain[i];
 }
 
+float trimToCeiling(std::vector<std::vector<float>>& channels, float ceilingLinear)
+{
+    float peak = 0.0f;
+    for (const auto& channel : channels)
+        for (float sample : channel)
+            peak = std::max(peak, std::abs(sample));
+
+    if (peak <= ceilingLinear || peak <= 0.0f)
+        return 0.0f;
+
+    const float scale = ceilingLinear / peak;
+    for (auto& channel : channels)
+        for (auto& sample : channel)
+            sample *= scale;
+    return 20.0f * std::log10(scale);
+}
+
 void applyInverseGain(std::vector<float>& samples, const std::vector<float>& gain, float amount)
 {
     constexpr float minGain = 1.0e-4f; // -80 dB guard, far below the 24 dB param ceiling

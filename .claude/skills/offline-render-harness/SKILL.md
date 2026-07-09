@@ -44,10 +44,19 @@ one-pole model parameters (or "model fit: rejected" when the measured
 template is used directly). No tempo input needed. Clean audio is
 detected as unpumped and passed through bit-identically.
 
+Batch a whole stem folder (non-destructive; the primary product flow):
+
+```bash
+depump_render --batch IN_DIR --out-dir OUT_DIR [--amount 0..1]
+# recovers pumped wav/aiff, passes clean files through bit-identically,
+# trims output to below full scale when recovery gain would clip (reported)
+```
+
 Full-matrix regression (81 fixtures, ~8 min):
 
 ```bash
-tools/render/matrix_sweep.sh [workdir]   # exit 0 iff all within 0.5 dB
+tools/render/matrix_sweep.sh [workdir]
+# v1 bar: >=59/81 within 0.5 dB AND worst <=1.8 dB (prints distribution)
 ```
 
 ## Compare envelopes (scriptable pass/fail)

@@ -23,4 +23,10 @@ void applyGain(std::vector<float>& samples, const std::vector<float>& gain);
 // inversion.
 void applyInverseGain(std::vector<float>& samples, const std::vector<float>& gain, float amount = 1.0f);
 
+// Headroom management: recovery gain can push peaks past full scale, and a
+// batch tool must hand back files safe to bounce anywhere. Returns the trim
+// applied in dB (<= 0; 0 when the peak already fits the ceiling) and scales
+// every channel identically so imaging is untouched.
+float trimToCeiling(std::vector<std::vector<float>>& channels, float ceilingLinear = 0.999f);
+
 } // namespace depump

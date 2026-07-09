@@ -95,6 +95,7 @@ target_sources(DePumpTests PRIVATE
     tests/DePumpTests.cpp
     tests/DspTests.cpp
     tests/AnalysisTests.cpp
+    tests/RecoveryRobustnessTests.cpp
     src/PluginProcessor.cpp
     ${DEPUMP_DSP_SOURCES}
 )
