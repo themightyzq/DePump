@@ -1,23 +1,24 @@
 // depump_render — headless driver of the DePump engine pipeline.
-// Thin shell: all math lives in src/dsp/ (pure, unit-tested).
+// Thin shell: all math lives in src/dsp/ (pure, unit-tested); file I/O in
+// src/io/ (shared with the GUI app).
 
 #include <cmath>
 #include <fstream>
 #include <iostream>
 #include <map>
-#include <optional>
 #include <string>
 #include <vector>
 
-#include <juce_audio_formats/juce_audio_formats.h>
-
 #include "dsp/Envelope.h"
 #include "dsp/GainCurve.h"
-#include "dsp/PumpAnalysis.h"
 #include "dsp/PumpProfile.h"
+#include "dsp/Recovery.h"
+#include "io/AudioFileIO.h"
 
 namespace
 {
+
+using depump::AudioFileData;
 
 struct Args
 {
@@ -63,72 +64,6 @@ depump::PumpProfile profileFromArgs(const Args& args)
     return profile;
 }
 
-struct AudioFile
-{
-    std::vector<std::vector<float>> channels;
-    double sampleRate = 0.0;
-    size_t numSamples() const { return channels.empty() ? 0 : channels.front().size(); }
-};
-
-AudioFile readWav(const juce::File& file)
-{
-    juce::AudioFormatManager manager;
-    manager.registerBasicFormats();
-    std::unique_ptr<juce::AudioFormatReader> reader(manager.createReaderFor(file));
-    if (reader == nullptr)
-        throw std::runtime_error("cannot read audio file: " + file.getFullPathName().toStdString());
-
-    AudioFile audio;
-    audio.sampleRate = reader->sampleRate;
-    const auto numChannels = static_cast<int>(reader->numChannels);
-    const auto numSamples = static_cast<int>(reader->lengthInSamples);
-
-    juce::AudioBuffer<float> buffer(numChannels, numSamples);
-    reader->read(&buffer, 0, numSamples, 0, true, true);
-
-    audio.channels.resize(static_cast<size_t>(numChannels));
-    for (int ch = 0; ch < numChannels; ++ch)
-        audio.channels[static_cast<size_t>(ch)].assign(buffer.getReadPointer(ch),
-                                                       buffer.getReadPointer(ch) + numSamples);
-    return audio;
-}
-
-void writeWav(const juce::File& file, const AudioFile& audio)
-{
-    file.deleteFile();
-    std::unique_ptr<juce::OutputStream> stream = file.createOutputStream();
-    if (stream == nullptr)
-        throw std::runtime_error("cannot open for writing: " + file.getFullPathName().toStdString());
-
-    juce::WavAudioFormat format;
-    auto writer = format.createWriterFor(stream, juce::AudioFormatWriterOptions{}
-                                                     .withSampleRate(audio.sampleRate)
-                                                     .withNumChannels(static_cast<int>(audio.channels.size()))
-                                                     .withBitsPerSample(32)
-                                                     .withSampleFormat(
-                                                         juce::AudioFormatWriterOptions::SampleFormat::floatingPoint));
-    if (writer == nullptr)
-        throw std::runtime_error("cannot create WAV writer (32-bit float)");
-
-    juce::AudioBuffer<float> buffer(static_cast<int>(audio.channels.size()),
-                                    static_cast<int>(audio.numSamples()));
-    for (size_t ch = 0; ch < audio.channels.size(); ++ch)
-        buffer.copyFrom(static_cast<int>(ch), 0, audio.channels[ch].data(),
-                        static_cast<int>(audio.channels[ch].size()));
-
-    if (!writer->writeFromAudioSampleBuffer(buffer, 0, buffer.getNumSamples()))
-        throw std::runtime_error("WAV write failed");
-}
-
-std::vector<float> monoMix(const AudioFile& audio)
-{
-    std::vector<float> mono(audio.numSamples(), 0.0f);
-    for (const auto& channel : audio.channels)
-        for (size_t i = 0; i < channel.size(); ++i)
-            mono[i] += channel[i] / static_cast<float>(audio.channels.size());
-    return mono;
-}
-
 // Constant-amplitude pad-like chord (A3, C#4, E4) — flat envelope by
 // construction, which makes fixture assertions and eyeballing easy.
 std::vector<float> makeCleanSignal(double sampleRate, double seconds)
@@ -146,6 +81,27 @@ std::vector<float> makeCleanSignal(double sampleRate, double seconds)
     return samples;
 }
 
+void reportOutcome(const depump::RecoveryOutcome& outcome, std::ostream& log)
+{
+    const auto& analysis = outcome.analysis;
+    log << "auto-analysis: " << (analysis.pumpDetected ? "PUMP DETECTED" : "no pump detected")
+        << " (confidence " << analysis.confidence << ")\n";
+    if (!analysis.pumpDetected)
+        return;
+
+    log << "  period " << analysis.periodSeconds << " s (" << 1.0 / analysis.periodSeconds << " Hz), depth "
+        << analysis.depthDb << " dB, dip at " << analysis.dipTimeSeconds << " s into the cycle\n";
+    if (analysis.modelFitted)
+        log << "  model fit: depth " << analysis.fittedProfile.depthDb << " dB, attack "
+            << analysis.fittedProfile.attackMs << " ms, hold " << analysis.fittedProfile.holdMs
+            << " ms, release " << analysis.fittedProfile.releaseMs << " ms, phase "
+            << analysis.fittedProfile.phase01 << "\n";
+    else
+        log << "  model fit: rejected — using measured template\n";
+    if (outcome.trimDb < 0.0f)
+        log << "  output trimmed " << outcome.trimDb << " dB to keep peaks below full scale\n";
+}
+
 int runMakeFixture(const Args& args)
 {
     const juce::File outDir(args.get("out-dir"));
@@ -157,21 +113,20 @@ int runMakeFixture(const Args& args)
     const double seconds = args.getDouble("seconds", 8.0);
     const auto profile = profileFromArgs(args);
 
-    AudioFile clean;
+    AudioFileData clean;
     clean.sampleRate = sampleRate;
     clean.channels.push_back(makeCleanSignal(sampleRate, seconds));
 
-    AudioFile pumped = clean;
+    AudioFileData pumped = clean;
     const auto gain = depump::synthesizeGainCurve(profile, sampleRate, pumped.numSamples());
     depump::applyGain(pumped.channels[0], gain);
 
-    writeWav(outDir.getChildFile("clean.wav"), clean);
-    writeWav(outDir.getChildFile("pumped.wav"), pumped);
+    depump::writeWavFile(outDir.getChildFile("clean.wav"), clean);
+    depump::writeWavFile(outDir.getChildFile("pumped.wav"), pumped);
     std::cout << "wrote " << outDir.getChildFile("clean.wav").getFullPathName()
               << " and pumped.wav (rate=" << profile.rateHz << "Hz depth=" << profile.depthDb
               << "dB attack=" << profile.attackMs << "ms hold=" << profile.holdMs
-              << "ms release=" << profile.releaseMs
-              << "ms phase=" << profile.phase01 << ")\n";
+              << "ms release=" << profile.releaseMs << "ms phase=" << profile.phase01 << ")\n";
     return 0;
 }
 
@@ -199,36 +154,6 @@ int runCompare(const Args& args)
     return 0;
 }
 
-// Analyze + recover one file in place. Returns the analysis for reporting.
-depump::PumpAnalysis autoRecover(AudioFile& audio, float amount, std::ostream& log)
-{
-    const auto analysis = depump::analyzePump(monoMix(audio), audio.sampleRate);
-    log << "auto-analysis: " << (analysis.pumpDetected ? "PUMP DETECTED" : "no pump detected")
-        << " (confidence " << analysis.confidence << ")\n";
-    if (analysis.pumpDetected)
-    {
-        log << "  period " << analysis.periodSeconds << " s (" << 1.0 / analysis.periodSeconds
-            << " Hz), depth " << analysis.depthDb << " dB, dip at " << analysis.dipTimeSeconds
-            << " s into the cycle\n";
-        if (analysis.modelFitted)
-            log << "  model fit: depth " << analysis.fittedProfile.depthDb << " dB, attack "
-                << analysis.fittedProfile.attackMs << " ms, hold " << analysis.fittedProfile.holdMs
-                << " ms, release " << analysis.fittedProfile.releaseMs << " ms, phase "
-                << analysis.fittedProfile.phase01 << "\n";
-        else
-            log << "  model fit: rejected — using measured template\n";
-
-        const auto gain = depump::gainCurveFromAnalysis(analysis, audio.sampleRate, audio.numSamples());
-        for (auto& channel : audio.channels)
-            depump::applyInverseGain(channel, gain, amount);
-
-        const float trimDb = depump::trimToCeiling(audio.channels);
-        if (trimDb < 0.0f)
-            log << "  output trimmed " << trimDb << " dB to keep peaks below full scale\n";
-    }
-    return analysis;
-}
-
 int runBatch(const Args& args)
 {
     const juce::File inDir(args.get("batch"));
@@ -251,10 +176,11 @@ int runBatch(const Args& args)
         std::cout << "== " << file.getFileName() << "\n";
         try
         {
-            auto audio = readWav(file);
-            const auto analysis = autoRecover(audio, amount, std::cout);
-            writeWav(outDir.getChildFile(file.getFileName()), audio);
-            analysis.pumpDetected ? ++recovered : ++untouched;
+            auto audio = depump::readAudioFile(file);
+            const auto outcome = depump::analyzeAndRecover(audio.channels, audio.sampleRate, amount);
+            reportOutcome(outcome, std::cout);
+            depump::writeWavFile(outDir.getChildFile(file.getFileName()), audio);
+            outcome.analysis.pumpDetected ? ++recovered : ++untouched;
         }
         catch (const std::exception& e)
         {
@@ -271,11 +197,13 @@ int runBatch(const Args& args)
 
 int runRender(const Args& args)
 {
-    auto audio = readWav(juce::File(args.get("in")));
+    auto audio = depump::readAudioFile(juce::File(args.get("in")));
 
     if (args.has("auto"))
     {
-        autoRecover(audio, static_cast<float>(args.getDouble("amount", 1.0)), std::cout);
+        const auto outcome = depump::analyzeAndRecover(
+            audio.channels, audio.sampleRate, static_cast<float>(args.getDouble("amount", 1.0)));
+        reportOutcome(outcome, std::cout);
     }
     else if (args.has("apply") || args.has("invert"))
     {
@@ -292,11 +220,11 @@ int runRender(const Args& args)
     }
 
     if (args.has("out"))
-        writeWav(juce::File(args.get("out")), audio);
+        depump::writeWavFile(juce::File(args.get("out")), audio);
 
     if (args.has("envelope"))
     {
-        const auto envelope = depump::extractRmsEnvelopeDb(monoMix(audio), audio.sampleRate);
+        const auto envelope = depump::extractRmsEnvelopeDb(depump::monoMix(audio), audio.sampleRate);
         std::ofstream csv(args.get("envelope"));
         if (!csv)
             throw std::runtime_error("cannot write envelope CSV: " + args.get("envelope"));

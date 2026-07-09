@@ -70,6 +70,11 @@ set(DEPUMP_DSP_SOURCES
     src/dsp/GainCurve.cpp
     src/dsp/Envelope.cpp
     src/dsp/PumpAnalysis.cpp
+    src/dsp/Recovery.cpp
+)
+
+set(DEPUMP_IO_SOURCES
+    src/io/AudioFileIO.cpp
 )
 
 # --- Engine CLI: headless driver of the product pipeline ---
@@ -78,6 +83,7 @@ juce_add_console_app(depump_render PRODUCT_NAME "depump_render")
 target_sources(depump_render PRIVATE
     tools/render/main.cpp
     ${DEPUMP_DSP_SOURCES}
+    ${DEPUMP_IO_SOURCES}
 )
 
 target_include_directories(depump_render PRIVATE src)
@@ -86,6 +92,33 @@ target_link_libraries(depump_render
     PRIVATE
         juce::juce_audio_formats
         juce::juce_recommended_config_flags
+)
+
+# --- Standalone app: the primary product (see CLAUDE.md) ---
+juce_add_gui_app(DePumpApp
+    PRODUCT_NAME "DePump"
+    COMPANY_NAME "ZQ SFX"
+    BUNDLE_ID "com.zqsfx.depump.app"
+)
+
+target_sources(DePumpApp PRIVATE
+    src/app/Main.cpp
+    src/app/MainComponent.cpp
+    ${DEPUMP_DSP_SOURCES}
+    ${DEPUMP_IO_SOURCES}
+)
+
+target_include_directories(DePumpApp PRIVATE src)
+# App is not a plugin: only the module-slimming defines apply here.
+target_compile_definitions(DePumpApp PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+
+target_link_libraries(DePumpApp
+    PRIVATE
+        juce::juce_audio_formats
+        juce::juce_gui_extra
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_lto_flags
+        juce::juce_recommended_warning_flags
 )
 
 # --- Unit tests (definition-of-done gate) ---

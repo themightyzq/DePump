@@ -618,14 +618,15 @@ PumpAnalysis analyzePump(const std::vector<float>& samples, double sampleRate)
         {
             auto candidate = result.fittedProfile;
             candidate.depthDb = std::clamp(candidate.depthDb * depthScale, 1.0f, 30.0f);
-            double period = result.periodSeconds;
-            polishAlignment(samples, sampleRate, candidate, period);
-            const double residual = correctedEnvelopeRoughness(samples, sampleRate, candidate, period);
+            double candidatePeriod = result.periodSeconds;
+            polishAlignment(samples, sampleRate, candidate, candidatePeriod);
+            const double residual =
+                correctedEnvelopeRoughness(samples, sampleRate, candidate, candidatePeriod);
             if (residual < bestResidual)
             {
                 bestResidual = residual;
                 bestProfile = candidate;
-                bestPeriod = period;
+                bestPeriod = candidatePeriod;
             }
         }
         result.fittedProfile = bestProfile;
