@@ -1,27 +1,56 @@
 ---
 name: offline-render-harness
-description: Render test WAVs through the DePump processor offline and compare gain envelopes, so DSP changes can be iterated and A/B'd without opening a DAW. Use when developing or debugging the de-pump algorithm, comparing envelope estimates, or checking that a DSP change did what was intended.
+description: Drive the DePump engine headlessly with depump_render — generate synthetic pumped fixtures, render/recover files, extract RMS envelopes, and numerically compare results. Use when developing or debugging analysis/recovery DSP, measuring recovery quality, or checking that a DSP change did what was intended.
 ---
 
-# Offline Render Harness
+# Offline Render Harness (`depump_render`)
 
-> STUB — the harness does not exist yet. Build it as one of the first
-> post-scaffold tasks, then replace this stub with the verified usage.
+All commands verified 2026-07-09. Binary:
+`build/depump_render_artefacts/Release/depump_render` (builds with the
+normal build; thin CLI over the pure core in `src/dsp/`).
 
-## Intended design (to be verified when built)
+## Generate ground-truth fixtures
 
-A console target (e.g. `depump_render`) that:
-1. Loads an input WAV (test fixtures live in `tests/fixtures/`, including
-   synthetic pumped material: known clean signal × known periodic gain curve).
-2. Runs it through the AudioProcessor offline at a chosen sample rate and
-   block size (vary both — never bake in assumptions).
-3. Writes the output WAV plus a short-term loudness/gain envelope CSV.
-4. A comparison mode diffs two envelope CSVs and reports max/RMS deviation.
+```bash
+depump_render --make-fixture --out-dir DIR [--sr 48000] [--seconds 8] \
+  [--rate 2 --depth 9 --attack 10 --hold 60 --release 150 --phase 0.25]
+```
 
-Because fixtures can be synthetic (clean × known g(t)), recovery quality is
-measurable objectively: apply DePump to the pumped fixture and compare
-against the clean original.
+Writes `clean.wav` (constant-amplitude chord) and `pumped.wav`
+(clean × synthesized gain curve). Because the curve is known, recovery
+quality is objectively measurable.
 
-## Usage (fill in when the harness exists)
+## Render / recover
 
-TBD
+```bash
+depump_render --in X.wav [--out Y.wav] [--envelope Z.csv] \
+  [--apply | --invert] [--amount 0..1] [profile args as above]
+```
+
+- No `--apply`/`--invert`: pipeline identity — output verified
+  bit-identical to input.
+- `--invert` with a profile applies the inverse gain curve (recovery).
+- `--envelope` writes RMS envelope CSV (20 ms window / 5 ms hop,
+  `time_sec,rms_db`).
+
+## Compare envelopes (scriptable pass/fail)
+
+```bash
+depump_render --compare A.csv --with B.csv [--tolerance dB]
+# exit 0 within tolerance, 1 above it, 2 on bad input
+```
+
+## Verified reference results (2026-07-09)
+
+Fixture at rate 2 Hz / depth 9 dB / attack 10 / hold 60 / release 150 /
+phase 0.25, 48 kHz: pumped-vs-clean max deviation 8.97 dB (≈ the baked
+depth); after `--invert` with the same profile, recovered-vs-clean max
+deviation 1e-07 dB. Known-profile recovery is exact; automatic analysis
+(ROADMAP step 2) only has to find the profile.
+
+## Notes
+
+- PumpProfile.holdMs is distinct from attackMs: attack is the one-pole
+  fall speed, hold is how long gain stays down (trigger energy length).
+- Core math lives in src/dsp/ (GainCurve, Envelope, PumpProfile) —
+  pure, host-free, unit-tested in tests/DspTests.cpp.

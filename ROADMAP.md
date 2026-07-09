@@ -9,11 +9,9 @@ Amount-not-Mix (#5), visualization (#2), and auto-analysis (#3) carry
 over — tempo-free operation is now core design rather than a fix.
 
 ## Next — the engine, in measurable steps
-1. Offline render harness / engine CLI (see
-   .claude/skills/offline-render-harness): file → pipeline → file, with
-   envelope extraction, synthetic pumped fixtures (known clean × known
-   gain curve), and numeric comparison. This is the embryo of the
-   product engine AND how recovery quality gets measured from day one.
+1. ~~Offline render harness / engine CLI~~ DONE 2026-07-09
+   (depump_render; known-profile recovery verified to 1e-07 dB residual
+   on synthetic fixtures — see .claude/skills/offline-render-harness).
 2. Analysis core v1 (fully automatic, no tempo input): envelope
    autocorrelation → pump period; cycle folding → median dip template +
    phase; time-varying tracking for drift. Measured against fixtures:

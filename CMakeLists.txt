@@ -64,12 +64,37 @@ target_link_libraries(DePump
         juce::juce_recommended_warning_flags
 )
 
+# Pure, host-free DSP core (see TESTING.md purity rule). Shared by the
+# engine CLI, tests, and (once the processor uses it) the plugin.
+set(DEPUMP_DSP_SOURCES
+    src/dsp/GainCurve.cpp
+    src/dsp/Envelope.cpp
+)
+
+# --- Engine CLI: headless driver of the product pipeline ---
+juce_add_console_app(depump_render PRODUCT_NAME "depump_render")
+
+target_sources(depump_render PRIVATE
+    tools/render/main.cpp
+    ${DEPUMP_DSP_SOURCES}
+)
+
+target_include_directories(depump_render PRIVATE src)
+
+target_link_libraries(depump_render
+    PRIVATE
+        juce::juce_audio_formats
+        juce::juce_recommended_config_flags
+)
+
 # --- Unit tests (definition-of-done gate) ---
 juce_add_console_app(DePumpTests PRODUCT_NAME "DePumpTests")
 
 target_sources(DePumpTests PRIVATE
     tests/DePumpTests.cpp
+    tests/DspTests.cpp
     src/PluginProcessor.cpp
+    ${DEPUMP_DSP_SOURCES}
 )
 
 target_include_directories(DePumpTests PRIVATE src)
