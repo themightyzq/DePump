@@ -82,3 +82,8 @@ target_link_libraries(DePumpTests
         Catch2::Catch2WithMain
         juce::juce_recommended_config_flags
 )
+
+enable_testing()
+list(APPEND CMAKE_MODULE_PATH "${Catch2_SOURCE_DIR}/extras")
+include(Catch)
+catch_discover_tests(DePumpTests)

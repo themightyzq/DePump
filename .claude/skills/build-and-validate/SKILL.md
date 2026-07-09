@@ -26,8 +26,10 @@ and `~/Library/Audio/Plug-Ins/Components/`.
 ## 3. Unit tests
 
 ```bash
-build/DePumpTests_artefacts/Release/DePumpTests
+ctest --test-dir build --output-on-failure
 ```
+
+(Direct binary for Catch2 CLI options: `build/DePumpTests_artefacts/Release/DePumpTests`)
 
 ## 4. Sign installed copies (required — Soundminer won't load unsigned)
 

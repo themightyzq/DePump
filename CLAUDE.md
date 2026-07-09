@@ -41,7 +41,9 @@ Source: Project_HyperPrism/VST3_SOUNDMINER_SETUP.md. Never remove:
 ## Build & test commands (verified 2026-07-09)
 - Configure: `cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"`
 - Build: `cmake --build build --config Release -j"$(sysctl -n hw.ncpu)"`
-- Unit tests: `build/DePumpTests_artefacts/Release/DePumpTests`
+- Unit tests: `ctest --test-dir build --output-on-failure`
+- Test strategy, unit/integration boundary, and the binding DSP purity
+  rule (all DSP is pure + host-free in src/dsp/): see TESTING.md
 - Sign (build auto-copies UNSIGNED to ~/Library/Audio/Plug-Ins — sign
   the installed copies after every build):
   `codesign --force --deep --timestamp --sign "Developer ID Application: ZQ SFX (TEAMID)" <plugin-path>`
