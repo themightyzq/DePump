@@ -1,8 +1,17 @@
 # CLAUDE.md — DePump
 
-JUCE audio plugin that removes baked-in sidechain pumping from stems by
-estimating and inverting the gain envelope. Primary users: producers and
-engineers working with AI-separated or client-supplied stems.
+DePump removes baked-in sidechain pumping from stems by estimating and
+inverting the gain envelope. Primary users: producers and engineers
+working with AI-separated or client-supplied stems.
+
+**Product shape (decided by owner, 2026-07-09, superseding the earlier
+plugin-first framing):** the primary product is a STANDALONE macOS app —
+the "RX route." Deep offline analysis of whole files, fully automatic
+recovery (no tempo/beat input from the user), batch processing of stem
+folders, non-destructive output. The VST3/AU plugin is a companion
+product built on the same core, deprioritized until the app works. All
+recovery intelligence lives in the pure DSP core (src/dsp/) so both
+products share one engine.
 
 ## Non-negotiable: the real-time audio thread
 processBlock and everything it calls run on a real-time thread. There:
@@ -15,8 +24,10 @@ AudioProcessorEditor (message thread) stay strictly separated. This
 outranks convenience and idiomatic C++ everywhere it applies.
 
 ## Targets & toolchain (decided by owner, 2026-07-09)
-- Formats: VST3 (primary — must stay Soundminer-compatible), AU,
-  Standalone. Platform: macOS only. Universal binary (arm64 + x86_64).
+- Primary target: standalone analysis/batch app (GUI app target, plus a
+  headless CLI driver of the same engine for dev/scripting). Companion
+  formats VST3 + AU keep building and passing gates but do not drive
+  feature work. Platform: macOS only. Universal binary (arm64 + x86_64).
 - Build: CMake + JUCE 8 (pinned via CMake FetchContent), C++20,
   Xcode clang. No Projucer.
 - Versioning: semver, 0.x until first usable release.
