@@ -22,9 +22,14 @@ TEST_CASE("Processor reports effect-plugin basics")
     CHECK_FALSE(proc.producesMidi());
     CHECK_FALSE(proc.isMidiEffect());
     CHECK(proc.getTailLengthSeconds() == 0.0);
-    CHECK(proc.apvts.getParameter(ParamID::depth) != nullptr);
-    CHECK(proc.apvts.getParameter(ParamID::rate) != nullptr);
-    CHECK(proc.apvts.getParameter(ParamID::mix) != nullptr);
+    for (auto* id : {ParamID::syncMode, ParamID::rate, ParamID::freeRate, ParamID::depth,
+                     ParamID::phase, ParamID::attack, ParamID::release, ParamID::amount,
+                     ParamID::output})
+        CHECK(proc.apvts.getParameter(id) != nullptr);
+
+    // Guard the REVIEW-UX decisions: no Mix param may reappear, and Free
+    // mode must exist for tempo-less hosts (Soundminer).
+    CHECK(proc.apvts.getParameter("mix") == nullptr);
 }
 
 TEST_CASE("Pass-through leaves audio bit-identical and finite")

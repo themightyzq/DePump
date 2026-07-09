@@ -5,12 +5,17 @@
 // Parameter IDs — unique and stable across releases (automation depends on it).
 namespace ParamID
 {
-inline constexpr auto rate = "rate";       // pump cycle length, tempo-synced note division
-inline constexpr auto depth = "depth";     // max recovery boost at the bottom of the dip, dB
-inline constexpr auto phase = "phase";     // offset of the inverse envelope within the cycle, %
-inline constexpr auto attack = "attack";   // how fast the original dip fell, ms
-inline constexpr auto release = "release"; // how fast the original dip recovered, ms
-inline constexpr auto mix = "mix";         // dry/wet, %
+inline constexpr auto syncMode = "syncMode"; // Sync (host tempo) or Free (Hz) — Free is required for
+                                             // tempo-less hosts like Soundminer (REVIEW-UX.md #1)
+inline constexpr auto rate = "rate";         // pump cycle: note division incl. dotted/triplet (Sync mode)
+inline constexpr auto freeRate = "freeRate"; // pump cycle in Hz (Free mode)
+inline constexpr auto depth = "depth";       // max recovery boost at the bottom of the dip, dB
+inline constexpr auto phase = "phase";       // offset of the inverse envelope within the cycle, %
+inline constexpr auto attack = "attack";     // how fast the original dip fell, ms
+inline constexpr auto release = "release";   // how fast the original dip recovered, ms
+inline constexpr auto amount = "amount";     // scales the inverse envelope 0-100% (deliberately NOT a
+                                             // dry/wet mix — that would blend the artifact back in)
+inline constexpr auto output = "output";     // output trim, dB (recovery gain needs headroom management)
 } // namespace ParamID
 
 class DePumpAudioProcessor : public juce::AudioProcessor

@@ -16,8 +16,17 @@ juce::AudioProcessorValueTreeState::ParameterLayout DePumpAudioProcessor::create
     AudioProcessorValueTreeState::ParameterLayout layout;
 
     layout.add(std::make_unique<AudioParameterChoice>(
+        ParameterID{ParamID::syncMode, 1}, "Mode",
+        StringArray{"Sync", "Free"}, 0));
+    layout.add(std::make_unique<AudioParameterChoice>(
         ParameterID{ParamID::rate, 1}, "Rate",
-        StringArray{"1/1", "1/2", "1/4", "1/8", "1/16"}, 2));
+        StringArray{"1/1", "1/2", "1/2.", "1/2T", "1/4", "1/4.", "1/4T",
+                    "1/8", "1/8.", "1/8T", "1/16", "1/16.", "1/16T"},
+        4));
+    layout.add(std::make_unique<AudioParameterFloat>(
+        ParameterID{ParamID::freeRate, 1}, "Free Rate",
+        NormalisableRange<float>(0.25f, 8.0f, 0.01f, 0.5f), 2.0f,
+        AudioParameterFloatAttributes().withLabel("Hz")));
     layout.add(std::make_unique<AudioParameterFloat>(
         ParameterID{ParamID::depth, 1}, "Depth",
         NormalisableRange<float>(0.0f, 24.0f, 0.1f), 6.0f,
@@ -35,9 +44,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout DePumpAudioProcessor::create
         NormalisableRange<float>(20.0f, 500.0f, 0.1f, 0.4f), 150.0f,
         AudioParameterFloatAttributes().withLabel("ms")));
     layout.add(std::make_unique<AudioParameterFloat>(
-        ParameterID{ParamID::mix, 1}, "Mix",
+        ParameterID{ParamID::amount, 1}, "Amount",
         NormalisableRange<float>(0.0f, 100.0f, 0.1f), 100.0f,
         AudioParameterFloatAttributes().withLabel("%")));
+    layout.add(std::make_unique<AudioParameterFloat>(
+        ParameterID{ParamID::output, 1}, "Output",
+        NormalisableRange<float>(-24.0f, 12.0f, 0.1f), 0.0f,
+        AudioParameterFloatAttributes().withLabel("dB")));
 
     return layout;
 }
