@@ -35,9 +35,12 @@ over — tempo-free operation is now core design rather than a fix.
    bit-identically, skips unreadable files with per-file errors,
    refuses in-place writes. Verified on a mixed folder; batch outputs
    measured 0.33-0.38 dB from clean.
-5. GUI app v1: drop files/folder, waveform + detected-pump overlay
-   (REVIEW-UX #2), A/B preview, per-file confidence readout, batch
-   queue, render.
+5. ~~GUI app v1~~ DONE 2026-07-09 (first cut): DePump.app — drag-drop
+   files/folders, output-folder picker, background batch queue with
+   per-file status + analysis readout (rate/depth/trim), non-
+   destructive guard, signed. Deferred to app v1.1: waveform +
+   detected-pump overlay (REVIEW-UX #2) and A/B playback preview —
+   both need audio playback infrastructure.
 
 ## Then
 - Multiband analysis/recovery (multiband-sidechained material).
