@@ -72,6 +72,22 @@ user-level ~/Library/Audio/Plug-Ins/ folders only.
 - Artifacts: `build/DePump_artefacts/Release/{VST3,AU,Standalone}`
 The `build-and-validate` skill runs this whole sequence.
 
+## UI (house look, adopted 2026-09-21)
+The app uses the ZQ SFX house UI from the shared `zqsfx_ui` module (fetched by tag in
+CMakeLists.txt; spec in ../docs/ZQSFX_UI_STYLE_GUIDE.md). Rules specific to DePump:
+- No colour literals in `src/app/`: use `zqsfx::ui::colour::*` and, for states that must be told
+  apart, the colour-blind-safe `zqsfx::ui::comp::*` channels. Job states map to: recovered
+  `comp::green`, clean `comp::sky`, analyzing `colour::accent`, error `colour::warn`, pending
+  `colour::ledOffRim`. State is never colour alone: the detail text names it, and error is a
+  square and pending a hollow ring.
+- Every control has a tooltip, an accessible title, and a description. The header mark
+  (`zqsfx::ui::LogoMark`) is the About button.
+- `MainComponent::ScopedHouseLookAndFeel` installs the LookAndFeel as the JUCE default; the
+  application owns it ahead of the window so it outlives every component.
+- UI gate: `depump_ui_snapshot <out.png>` renders the window headlessly with one row per job
+  state. Render before and after any UI change and compare.
+- The companion plugin still uses `GenericAudioProcessorEditor` (no custom editor yet).
+
 ## Definition of done (decided by owner, 2026-07-09)
 A change is done when: unit tests pass; pluginval at strictness 10
 passes on all built formats; and any audible behavior change has been

@@ -37,6 +37,13 @@ All DSP is pure, host-free C++ in `src/dsp/` (no JUCE plugin/GUI types, no
 APVTS) so the plugin, app, and CLI share one engine — see `TESTING.md`'s
 purity rule.
 
+## Look and feel
+
+The app uses the shared ZQ SFX house UI, [zqsfx_ui](https://github.com/themightyzq/zqsfx_ui)
+(GPL-3.0-or-later; fetched by CMake, no manual step): dark rack-panel chassis, embedded OFL fonts,
+and status colours chosen to stay distinguishable for colour-blind users, each backed by text and
+shape. `depump_ui_snapshot out.png` renders the window headlessly for before/after comparisons.
+
 ## Requirements
 
 - CMake 3.25+

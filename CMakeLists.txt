@@ -18,6 +18,15 @@ FetchContent_Declare(Catch2
 )
 FetchContent_MakeAvailable(JUCE Catch2)
 
+# The ZQ SFX house UI (tokens, LookAndFeel, knobs, fonts, the company mark). Must come after
+# JUCE. Pinned by tag: bump deliberately, then re-run depump_ui_snapshot and compare.
+FetchContent_Declare(zqsfx_ui
+    GIT_REPOSITORY https://github.com/themightyzq/zqsfx_ui.git
+    GIT_TAG v0.2.1
+    GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(zqsfx_ui)
+
 juce_add_plugin(DePump
     COMPANY_NAME "ZQ SFX"
     COMPANY_WEBSITE "https://www.zq-sfx.com"
@@ -120,10 +129,33 @@ target_compile_definitions(DePumpApp PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
 
 target_link_libraries(DePumpApp
     PRIVATE
+        zqsfx::ui
         juce::juce_audio_formats
         juce::juce_gui_extra
         juce::juce_recommended_config_flags
         juce::juce_recommended_lto_flags
+        juce::juce_recommended_warning_flags
+)
+
+# --- Headless UI render: the look-and-feel regression gate ---
+juce_add_console_app(depump_ui_snapshot PRODUCT_NAME "depump_ui_snapshot")
+
+target_sources(depump_ui_snapshot PRIVATE
+    tools/ui_snapshot/main.cpp
+    src/app/MainComponent.cpp
+    ${DEPUMP_DSP_SOURCES}
+    ${DEPUMP_IO_SOURCES}
+)
+
+target_include_directories(depump_ui_snapshot PRIVATE src)
+target_compile_definitions(depump_ui_snapshot PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+
+target_link_libraries(depump_ui_snapshot
+    PRIVATE
+        zqsfx::ui
+        juce::juce_audio_formats
+        juce::juce_gui_extra
+        juce::juce_recommended_config_flags
         juce::juce_recommended_warning_flags
 )
 
