@@ -20,13 +20,16 @@ FetchContent_MakeAvailable(JUCE Catch2)
 
 juce_add_plugin(DePump
     COMPANY_NAME "ZQ SFX"
+    COMPANY_WEBSITE "https://www.zq-sfx.com"
+    COMPANY_EMAIL "connect@zq-sfx.com"
+    COMPANY_COPYRIGHT "Copyright (c) 2026 ZQ SFX"
     IS_SYNTH FALSE
     NEEDS_MIDI_INPUT FALSE
     NEEDS_MIDI_OUTPUT FALSE
     IS_MIDI_EFFECT FALSE
     EDITOR_WANTS_KEYBOARD_FOCUS FALSE
     COPY_PLUGIN_AFTER_BUILD TRUE
-    PLUGIN_MANUFACTURER_CODE ZQFX
+    PLUGIN_MANUFACTURER_CODE ZQSF
     PLUGIN_CODE Dpmp
     BUNDLE_ID "com.zqsfx.depump"
     FORMATS VST3 AU Standalone
@@ -98,6 +101,9 @@ target_link_libraries(depump_render
 juce_add_gui_app(DePumpApp
     PRODUCT_NAME "DePump"
     COMPANY_NAME "ZQ SFX"
+    COMPANY_WEBSITE "https://www.zq-sfx.com"
+    COMPANY_EMAIL "connect@zq-sfx.com"
+    COMPANY_COPYRIGHT "Copyright (c) 2026 ZQ SFX"
     BUNDLE_ID "com.zqsfx.depump.app"
 )
 

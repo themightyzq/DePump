@@ -1,3 +1,5 @@
+Universal ZQ SFX rules (identity, real-time safety, VCS policy, signing, shared agents, shared docs) live in ../CLAUDE.md and apply here. This file only adds what is specific to DePump.
+
 # CLAUDE.md — DePump
 
 DePump removes baked-in sidechain pumping from stems by estimating and
@@ -31,23 +33,29 @@ outranks convenience and idiomatic C++ everywhere it applies.
 - Build: CMake + JUCE 8 (pinned via CMake FetchContent), C++20,
   Xcode clang. No Projucer.
 - Versioning: semver, 0.x until first usable release.
-- Code signing with "Developer ID Application: ZQ SFX
-  (TEAMID)" is part of every release build — Soundminer will not
-  load unsigned plugins. Notarization deferred until distribution.
+- Local dev builds are signed ad hoc with "Developer ID Application:
+  ZQ SFX (TEAMID)" (see Build & test commands below) —
+  Soundminer will not load unsigned plugins. A release build signs (and,
+  once distribution starts, notarizes) with the shared script instead of
+  a raw `codesign` call — see ../CLAUDE.md section 5 and
+  docs/NOTARIZATION.md:
+  `JUCENotarizationTool/sign_and_notarize.sh --product "DePump" --project-dir . --formats "VST3 AU" [--install]`.
 
 ## Soundminer compatibility (binding; owner-supplied, 2026-07-09)
-Source: Project_HyperPrism/VST3_SOUNDMINER_SETUP.md. Never remove:
+Canonical source: `docs/VST3_SOUNDMINER_SETUP.md` (DePump keeps no copy of its own). Never
+remove these from CMakeLists.txt:
 - Compile definitions: JUCE_WEB_BROWSER=0, JUCE_USE_CURL=0,
   JUCE_VST3_CAN_REPLACE_VST2=0, JUCE_DISPLAY_SPLASH_SCREEN=0,
   JUCE_REPORT_APP_USAGE=0; on macOS also JUCE_JACK=0, JUCE_ALSA=0.
 - juce_add_plugin: IS_SYNTH FALSE, NEEDS_MIDI_INPUT/OUTPUT FALSE,
   IS_MIDI_EFFECT FALSE, EDITOR_WANTS_KEYBOARD_FOCUS FALSE.
-- Vendor identity: COMPANY_NAME "ZQ SFX", PLUGIN_MANUFACTURER_CODE
-  ZQFX (matches HyperPrism); PLUGIN_CODE Dpmp is DePump's unique code.
+- Vendor identity (COMPANY_NAME, PLUGIN_MANUFACTURER_CODE): see ../CLAUDE.md section 2.
+  PLUGIN_CODE Dpmp is DePump's unique code.
 - All automatable parameters live in APVTS with unique IDs.
-- Soundminer scans /Library/Audio/Plug-Ins/VST3/ — installing there
-  needs sudo and is a manual user step; builds auto-copy to the
-  user-level ~/Library/Audio/Plug-Ins/ folders.
+
+DePump-specific: Soundminer scans /Library/Audio/Plug-Ins/VST3/ — installing there
+needs sudo and is a manual user step; builds auto-copy to the
+user-level ~/Library/Audio/Plug-Ins/ folders only.
 
 ## Build & test commands (verified 2026-07-09)
 - Configure: `cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"`
@@ -55,9 +63,10 @@ Source: Project_HyperPrism/VST3_SOUNDMINER_SETUP.md. Never remove:
 - Unit tests: `ctest --test-dir build --output-on-failure`
 - Test strategy, unit/integration boundary, and the binding DSP purity
   rule (all DSP is pure + host-free in src/dsp/): see TESTING.md
-- Sign (build auto-copies UNSIGNED to ~/Library/Audio/Plug-Ins — sign
-  the installed copies after every build):
-  `codesign --force --deep --timestamp --sign "Developer ID Application: ZQ SFX (TEAMID)" <plugin-path>`
+- Sign, local dev only (build auto-copies UNSIGNED to ~/Library/Audio/Plug-Ins — sign
+  the installed copies after every build so Soundminer/pluginval can load them):
+  `codesign --force --deep --timestamp --sign "Developer ID Application: ZQ SFX (TEAMID)" <plugin-path>`.
+  A release build uses the shared signing script instead — see Targets & toolchain above.
 - Validate: `/Applications/pluginval.app/Contents/MacOS/pluginval --strictness-level 10 --validate <plugin-path>`
   (for AU, run `killall -9 AudioComponentRegistrar` first if stale)
 - Artifacts: `build/DePump_artefacts/Release/{VST3,AU,Standalone}`
@@ -76,8 +85,8 @@ checked by ear in a real DAW. State plainly which gates were run.
 - Root-cause fixes only; no bandaids.
 
 ## Git & repo hygiene
-- git with a private GitHub remote. Feature branches; main stays
-  releasable. Imperative-mood commit subjects.
+- git with a public GitHub remote (`github.com/themightyzq/DePump`). Feature branches; main
+  stays releasable. Imperative-mood commit subjects.
 - Blocking: failing build/tests on main; secrets or unversioned binary
   junk about to be committed.
 - Deferrable (log to ROADMAP.md, never interrupt feature work):
@@ -86,10 +95,11 @@ checked by ear in a real DAW. State plainly which gates were run.
 ## Steering layers
 - CLAUDE.md — always-on rules (this file).
 - Skills (.claude/skills/) — reusable playbooks, loaded on invocation:
-  - `build-and-validate` — build → pluginval → artifact locations
-    (stub until the scaffold session verifies real commands).
-  - `offline-render-harness` — render test WAVs through the processor
-    to iterate DSP without a DAW (stub until the harness exists).
+  - `build-and-validate` — build → sign (local dev) → pluginval strictness 10 → artifact
+    locations; commands verified working 2026-07-09.
+  - `offline-render-harness` — drives `depump_render` headlessly: synthetic fixtures,
+    batch/auto recovery, RMS envelope extraction and comparison; commands verified working
+    2026-07-09.
 - Subagents — context-isolating or parallel research; use built-ins
   (Explore, general-purpose); no custom subagents defined.
 - Hooks (.claude/settings.json) — clang-format runs automatically on
