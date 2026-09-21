@@ -119,7 +119,11 @@ ZQ SFX — https://www.zq-sfx.com — connect@zq-sfx.com
 
 ## Licence
 
-No LICENSE file exists in this repository yet.
+Copyright (c) 2026 ZQ SFX.
+
+Licensed under the GNU General Public License v3.0 or later (GPL-3.0-or-later). See
+[LICENSE](LICENSE). Built with [JUCE](https://juce.com), used under its AGPLv3 option, which
+GPL-3.0 is compatible with.
 
 ## Version control
 
