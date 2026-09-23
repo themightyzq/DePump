@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.25)
 if(APPLE)
     # Universal binary is mandatory: Soundminer will not load anything else (JUCE/CLAUDE.md section 5).
     set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "Build architectures for macOS")
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version (universal binaries cannot go below 11.0)")
 endif()
 project(DePump VERSION 0.1.0)
 
@@ -52,6 +53,7 @@ juce_add_plugin(DePump
 
 target_sources(DePump PRIVATE
     src/PluginProcessor.cpp
+    src/PluginLearnEngine.cpp
 )
 
 target_include_directories(DePump PRIVATE src)
@@ -92,6 +94,10 @@ set(DEPUMP_DSP_SOURCES
 set(DEPUMP_IO_SOURCES
     src/io/AudioFileIO.cpp
 )
+
+# The plugin now calls into the pure DSP core (Learn wires it up; see
+# src/PluginLearnEngine.cpp) — needs the same sources as the app/CLI.
+target_sources(DePump PRIVATE ${DEPUMP_DSP_SOURCES})
 
 # --- Engine CLI: headless driver of the product pipeline ---
 juce_add_console_app(depump_render PRODUCT_NAME "depump_render")
@@ -171,12 +177,19 @@ target_sources(DePumpTests PRIVATE
     tests/DspTests.cpp
     tests/AnalysisTests.cpp
     tests/RecoveryRobustnessTests.cpp
+    tests/PluginDspTests.cpp
     src/PluginProcessor.cpp
+    src/PluginLearnEngine.cpp
     ${DEPUMP_DSP_SOURCES}
 )
 
 target_include_directories(DePumpTests PRIVATE src)
-target_compile_definitions(DePumpTests PRIVATE ${DEPUMP_HOST_COMPAT_DEFS})
+target_compile_definitions(DePumpTests PRIVATE ${DEPUMP_HOST_COMPAT_DEFS}
+    # tests/PluginDspTests.cpp pumps the message loop with
+    # MessageManager::runDispatchLoopUntil() so PluginLearnEngine's
+    # background-thread callAsync() results can be delivered synchronously
+    # in a console test app. Test-only; never defined for the shipped plugin.
+    JUCE_MODAL_LOOPS_PERMITTED=1)
 
 target_link_libraries(DePumpTests
     PRIVATE

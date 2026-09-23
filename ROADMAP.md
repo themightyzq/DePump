@@ -46,8 +46,11 @@ over — tempo-free operation is now core design rather than a fix.
 - Multiband analysis/recovery (multiband-sidechained material).
 - Neural gain inversion (de-limiter literature) where template methods
   fail — irregular/program-dependent pumping.
-- Companion plugin: same core; Learn button = analysis v1 on a captured
-  window; Soundminer compatibility rules apply here (see CLAUDE.md).
+- ~~Companion plugin: same core; Learn button = analysis v1 on a captured
+  window; Soundminer compatibility rules apply here (see CLAUDE.md)~~ DONE
+  2026-09-23: the plugin's Learn parameter captures ~3s of audio, fits a
+  profile with the existing analysis core off the audio thread, and applies
+  it to freeRate/depth/attack/hold/release/phase; no added latency.
 
 ## Later
 - Factory profiles/presets; recovery-framed copy (REVIEW-UX #7/#8).

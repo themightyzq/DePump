@@ -8,8 +8,10 @@ with audible pumping.
 
 Three things ship: DePump.app, a standalone batch app and the main product;
 depump_render, a command-line renderer; and a VST3/AU plugin. The plugin
-currently passes audio through unchanged, its analysis engine is not wired
-in yet, so use the app or the CLI renderer to actually process audio.
+has a Learn parameter: press it during playback to capture roughly 3 seconds
+of audio, analyze it off-thread, and if a pump is detected, fit and apply
+the model to freeRate, depth, attack, hold, release, and phase with no added
+latency. If no pump is detected, the plugin remains a pass-through.
 
 ## Install
 
@@ -17,6 +19,8 @@ There are no packaged releases yet; build from source (below). The built
 app and plugin are unsigned, so on first launch macOS will block them:
 right-click (or Control-click) and choose Open, then confirm, to run them
 the first time.
+
+Requires macOS 11.0 or later.
 
 ## Use
 

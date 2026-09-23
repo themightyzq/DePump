@@ -18,33 +18,68 @@ float onePoleCoeff(float ms, double sampleRate)
 }
 } // namespace
 
+void GainOscillator::cacheDerivedCoefficients() noexcept
+{
+    const float rateHz = profile.rateHz > 0.0f ? profile.rateHz : 0.0001f; // guard div-by-zero
+    periodSamples = sampleRate / static_cast<double>(rateHz);
+    dipStartSamples = static_cast<double>(profile.phase01) * periodSamples;
+    dipWindowSamples = (static_cast<double>(profile.attackMs) + static_cast<double>(profile.holdMs)) * 0.001 * sampleRate;
+    floorLin = dbToLin(-profile.depthDb);
+    attackCoeff = onePoleCoeff(profile.attackMs, sampleRate);
+    releaseCoeff = onePoleCoeff(profile.releaseMs, sampleRate);
+}
+
+void GainOscillator::reset(double sampleRateIn) noexcept
+{
+    sampleRate = sampleRateIn > 0.0 ? sampleRateIn : 44100.0;
+    sampleIndex = 0;
+    g = 1.0f;
+    cacheDerivedCoefficients();
+}
+
+void GainOscillator::setProfile(const PumpProfile& profileIn) noexcept
+{
+    profile = profileIn;
+    cacheDerivedCoefficients();
+}
+
+void GainOscillator::setPhaseReferenceSample(int64_t timelineSample) noexcept
+{
+    sampleIndex = timelineSample;
+}
+
+float GainOscillator::nextGain() noexcept
+{
+    double posInCycle = std::fmod(static_cast<double>(sampleIndex) - dipStartSamples, periodSamples);
+    if (posInCycle < 0.0)
+        posInCycle += periodSamples;
+
+    const bool inDip = posInCycle < dipWindowSamples;
+    const float target = inDip ? floorLin : 1.0f;
+    const float coeff = target < g ? attackCoeff : releaseCoeff;
+    g += coeff * (target - g);
+    ++sampleIndex;
+    return g;
+}
+
+float invertSample(float sample, float gain, float amount) noexcept
+{
+    constexpr float minGain = 1.0e-4f; // -80 dB guard, far below the 24 dB param ceiling
+    const float g = std::max(gain, minGain);
+    return sample * std::pow(g, -amount);
+}
+
 std::vector<float> synthesizeGainCurve(const PumpProfile& profile, double sampleRate, size_t numSamples)
 {
     assert(sampleRate > 0.0 && profile.rateHz > 0.0f);
 
-    const double periodSamples = sampleRate / profile.rateHz;
-    const double dipStart = static_cast<double>(profile.phase01) * periodSamples;
-    const double dipWindowSamples = (profile.attackMs + profile.holdMs) * 0.001 * sampleRate;
-    const float floorLin = dbToLin(-profile.depthDb);
-    const float attackCoeff = onePoleCoeff(profile.attackMs, sampleRate);
-    const float releaseCoeff = onePoleCoeff(profile.releaseMs, sampleRate);
+    GainOscillator osc;
+    osc.reset(sampleRate);
+    osc.setProfile(profile);
 
     std::vector<float> gain(numSamples);
-    float g = 1.0f;
-
     for (size_t n = 0; n < numSamples; ++n)
-    {
-        double posInCycle = std::fmod(static_cast<double>(n) - dipStart, periodSamples);
-        if (posInCycle < 0.0)
-            posInCycle += periodSamples;
-
-        const bool inDip = posInCycle < dipWindowSamples;
-        const float target = inDip ? floorLin : 1.0f;
-        const float coeff = target < g ? attackCoeff : releaseCoeff;
-        g += coeff * (target - g);
-        gain[n] = g;
-    }
-
+        gain[n] = osc.nextGain();
     return gain;
 }
 
@@ -74,13 +109,9 @@ float trimToCeiling(std::vector<std::vector<float>>& channels, float ceilingLine
 
 void applyInverseGain(std::vector<float>& samples, const std::vector<float>& gain, float amount)
 {
-    constexpr float minGain = 1.0e-4f; // -80 dB guard, far below the 24 dB param ceiling
     const size_t n = std::min(samples.size(), gain.size());
     for (size_t i = 0; i < n; ++i)
-    {
-        const float g = std::max(gain[i], minGain);
-        samples[i] *= std::pow(g, -amount);
-    }
+        samples[i] = invertSample(samples[i], gain[i], amount);
 }
 
 } // namespace depump
