@@ -1,4 +1,8 @@
 cmake_minimum_required(VERSION 3.25)
+if(APPLE)
+    # Universal binary is mandatory: Soundminer will not load anything else (JUCE/CLAUDE.md section 5).
+    set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "Build architectures for macOS")
+endif()
 project(DePump VERSION 0.1.0)
 
 set(CMAKE_CXX_STANDARD 20)

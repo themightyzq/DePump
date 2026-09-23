@@ -20,3 +20,6 @@ xcuserdata/
 # Audio scratch (keep committed fixtures in tests/fixtures/ only)
 *.wav
 !tests/fixtures/*.wav
+
+# CMake build trees other than build/ (review, universal, ui gates). Never committed.
+build-*/
