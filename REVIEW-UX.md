@@ -49,8 +49,8 @@ breaks recovery — boosting even slightly off-beat makes the pumping
 looping audio and nudging a generic slider is a guessing game that makes
 the user feel stupid.
 
-**Why it matters:** Every product in the adjacent category (pump
-*generators*: Kickstart, LFOTool, ShaperBox) ships a curve-over-waveform
+**Why it matters:** Every product in the adjacent category of
+pump-generator plugins ships a curve-over-waveform
 display — users expect to *see* where the envelope sits against the
 audio. For an *inverse* tool the need is stronger, since the cost of
 misalignment is amplification of the artifact.
@@ -66,8 +66,8 @@ can align phase on a real stem in under 30 seconds without docs.)
 **What the user experiences (as planned):** They must reverse-engineer
 the original mix's compressor settings — rate, depth, attack, release,
 phase — by ear. That is exactly the expertise barrier a recovery tool
-exists to remove. The category's best "fixer" tools (RX, Soothe,
-smart:comp) lead with analyze-then-adjust, not dial-from-scratch.
+exists to remove. The category's best restoration and dynamic-fixer
+tools lead with analyze-then-adjust, not dial-from-scratch.
 
 **Why it matters:** Beat-synchronous envelope folding over a few bars can
 estimate rate, phase, depth, and dip shape automatically (already

@@ -1,7 +1,7 @@
 # DePump Roadmap
 
 Product pivot 2026-07-09 (owner decision): standalone deep-analysis
-batch app is the primary product — the "RX route." Fully automatic
+batch app is the primary product — the offline-analysis route. Fully automatic
 recovery, no tempo/beat input, batch a folder of stems, non-destructive
 output. Plugin becomes a companion built on the same core. REVIEW-UX.md
 predates the pivot (plugin-framed); its findings on headroom (#4),

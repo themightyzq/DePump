@@ -8,7 +8,7 @@ working with AI-separated or client-supplied stems.
 
 **Product shape (decided by owner, 2026-07-09, superseding the earlier
 plugin-first framing):** the primary product is a STANDALONE macOS app —
-the "RX route." Deep offline analysis of whole files, fully automatic
+the offline-analysis route. Deep offline analysis of whole files, fully automatic
 recovery (no tempo/beat input from the user), batch processing of stem
 folders, non-destructive output. The VST3/AU plugin is a companion
 product built on the same core, deprioritized until the app works. All
@@ -33,9 +33,9 @@ outranks convenience and idiomatic C++ everywhere it applies.
 - Build: CMake + JUCE 8 (pinned via CMake FetchContent), C++20,
   Xcode clang. No Projucer.
 - Versioning: semver, 0.x until first usable release.
-- Local dev builds are signed ad hoc with "Developer ID Application:
-  ZQ SFX (TEAMID)" (see Build & test commands below) —
-  Soundminer will not load unsigned plugins. A release build signs (and,
+- Local dev builds are signed ad hoc with the ZQ SFX Developer ID
+  certificate, set via the keychain profile (see Build & test commands
+  below) — Soundminer will not load unsigned plugins. A release build signs (and,
   once distribution starts, notarizes) with the shared script instead of
   a raw `codesign` call — see ../CLAUDE.md section 5 and
   docs/NOTARIZATION.md:
@@ -65,7 +65,8 @@ user-level ~/Library/Audio/Plug-Ins/ folders only.
   rule (all DSP is pure + host-free in src/dsp/): see TESTING.md
 - Sign, local dev only (build auto-copies UNSIGNED to ~/Library/Audio/Plug-Ins — sign
   the installed copies after every build so Soundminer/pluginval can load them):
-  `codesign --force --deep --timestamp --sign "Developer ID Application: ZQ SFX (TEAMID)" <plugin-path>`.
+  `codesign --force --deep --timestamp --sign "$IDENTITY" <plugin-path>`, where `$IDENTITY`
+  is the ZQ SFX Developer ID certificate set via the keychain profile.
   A release build uses the shared signing script instead — see Targets & toolchain above.
 - Validate: `/Applications/pluginval.app/Contents/MacOS/pluginval --strictness-level 10 --validate <plugin-path>`
   (for AU, run `killall -9 AudioComponentRegistrar` first if stale)

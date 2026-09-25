@@ -34,7 +34,7 @@ ctest --test-dir build --output-on-failure
 ## 4. Sign installed copies (required — Soundminer won't load unsigned)
 
 ```bash
-IDENTITY="Developer ID Application: ZQ SFX (TEAMID)"
+IDENTITY="$(security find-identity -v -p codesigning | grep 'Developer ID Application' | head -1 | sed -E 's/.*"(.*)"/\1/')"  # your ZQ SFX Developer ID certificate
 codesign --force --deep --timestamp --sign "$IDENTITY" "$HOME/Library/Audio/Plug-Ins/VST3/DePump.vst3"
 codesign --force --deep --timestamp --sign "$IDENTITY" "$HOME/Library/Audio/Plug-Ins/Components/DePump.component"
 codesign -v "$HOME/Library/Audio/Plug-Ins/VST3/DePump.vst3"
