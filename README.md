@@ -15,10 +15,17 @@ latency. If no pump is detected, the plugin remains a pass-through.
 
 ## Install
 
-There are no packaged releases yet; build from source (below). The built
-app and plugin are unsigned, so on first launch macOS will block them:
+Download the latest build from the
+[Releases page](https://github.com/themightyzq/DePump/releases/latest). Each
+platform has the plugin (VST3; on macOS also AU and a Standalone) and the
+DePump desktop app. On macOS, copy the `.vst3` to
+`~/Library/Audio/Plug-Ins/VST3/` and the `.component` to
+`~/Library/Audio/Plug-Ins/Components/`. The macOS builds are universal
+(Apple Silicon and Intel).
+
+The builds are unsigned, so on first launch macOS will block the apps:
 right-click (or Control-click) and choose Open, then confirm, to run them
-the first time.
+the first time. Some hosts need plugins signed locally.
 
 Requires macOS 11.0 or later.
 
