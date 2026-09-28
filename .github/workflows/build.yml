@@ -1,0 +1,87 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# JUCE, Catch2 and zqsfx_ui are fetched by CMake (FetchContent, pinned tags); no submodules.
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libasound2-dev libfreetype-dev libfontconfig1-dev libx11-dev libxcomposite-dev \
+            libxcursor-dev libxext-dev libxfixes-dev libxinerama-dev libxrandr-dev \
+            libxrender-dev libgl-dev libwebkit2gtk-4.1-dev libgtk-3-dev libcurl4-openssl-dev xvfb
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release --parallel 2
+
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      # pluginval at the portfolio floor (strictness 5) on the built VST3, macOS only.
+      - name: Validate with pluginval (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          curl -sL "https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip" -o pluginval.zip
+          unzip -q pluginval.zip
+          pluginval.app/Contents/MacOS/pluginval --strictness-level 5 --validate "build/DePump_artefacts/Release/VST3/DePump.vst3"
+
+      - name: Verify universal binaries and macOS floor (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          n=0
+          while IFS= read -r -d '' b; do
+            a=$(lipo -archs "$b"); m=$(otool -l "$b" | awk '/minos/{print $2}' | sort -V | tail -1)
+            echo "$b: $a, minimum macOS $m"
+            [[ $a == *arm64* && $a == *x86_64* ]] || { echo "::error::not universal: $b"; exit 1; }
+            [[ $(printf '%s\n' "$m" 11.0 | sort -V | tail -1) == 11.0 ]] || { echo "::error::minimum macOS above 11.0: $b"; exit 1; }
+            n=$((n+1))
+          done < <(find "build/DePump_artefacts/Release/VST3" "build/DePump_artefacts/Release/AU" "build/DePumpApp_artefacts/Release" -path '*Contents/MacOS/*' -type f -print0)
+          [[ $n -gt 0 ]] || { echo "::error::no macOS binaries found"; exit 1; }
+
+      - name: Upload VST3
+        uses: actions/upload-artifact@v4
+        with:
+          name: DePump-${{ runner.os }}-VST3
+          path: build/DePump_artefacts/Release/VST3/*.vst3
+          if-no-files-found: error
+
+      - name: Upload AU and Standalone plugin (macOS)
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: DePump-macOS-AU-Standalone
+          path: |
+            build/DePump_artefacts/Release/AU/*.component
+            build/DePump_artefacts/Release/Standalone/*.app
+          if-no-files-found: error
+
+      # The DePump desktop app (whole-file analysis and render), separate from the plugin.
+      - name: Upload desktop app
+        uses: actions/upload-artifact@v4
+        with:
+          name: DePump-${{ runner.os }}-App
+          path: |
+            build/DePumpApp_artefacts/Release/*.app
+            build/DePumpApp_artefacts/Release/*.exe
+            build/DePumpApp_artefacts/Release/DePump
+          if-no-files-found: error
