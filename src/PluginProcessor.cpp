@@ -336,8 +336,10 @@ juce::AudioProcessorEditor* DePumpAudioProcessor::createEditor()
 
 void DePumpAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
 {
-    apvts.state.setProperty("engaged", engaged.load(), nullptr);
-    if (auto xml = apvts.copyState().createXml())
+    // Copy first: never mutate the live state tree from the host's calling thread.
+    auto state = apvts.copyState();
+    state.setProperty("engaged", engaged.load(), nullptr);
+    if (auto xml = state.createXml())
         copyXmlToBinary(*xml, destData);
 }
 

@@ -242,3 +242,64 @@ TEST_CASE("Do no harm: Learn on clean audio changes no parameter and leaves audi
     for (size_t i = 0; i < clean.size(); i += 97)
         REQUIRE(processed[i] == clean[i]);
 }
+
+namespace
+{
+// Runs Learn on clean audio WITHOUT pumping the message loop, and returns once
+// the background thread has finished analysing. The result lambda is then
+// still queued on the message thread.
+bool learnUntilAnalysisDoneWithoutDispatch(DePumpAudioProcessor& proc, TestPlayHead& playHead, double sr,
+                                           int blockSize)
+{
+    auto* learnParam = proc.apvts.getParameter(ParamID::learn);
+    if (learnParam == nullptr)
+        return false;
+    playHead.sample = 0;
+    learnParam->setValueNotifyingHost(1.0f);
+    runThroughProcessor(proc, playHead, makeCleanChord(sr, 6.0), blockSize);
+
+    const auto deadline = juce::Time::getMillisecondCounter() + 30000u;
+    while (proc.getLearnEngineForTest().getStatus() != PluginLearnEngine::Status::noPumpDetected &&
+           juce::Time::getMillisecondCounter() < deadline)
+        juce::Thread::sleep(10);
+    return proc.getLearnEngineForTest().getStatus() == PluginLearnEngine::Status::noPumpDetected;
+}
+} // namespace
+
+TEST_CASE("Learn result queued for the message thread is inert after the processor is destroyed")
+{
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    constexpr double sr = 48000.0;
+    constexpr int blockSize = 512;
+    {
+        DePumpAudioProcessor proc;
+        TestPlayHead playHead;
+        proc.setPlayHead(&playHead);
+        proc.setPlayConfigDetails(1, 1, sr, blockSize);
+        proc.prepareToPlay(sr, blockSize);
+        REQUIRE(learnUntilAnalysisDoneWithoutDispatch(proc, playHead, sr, blockSize));
+    } // engine destroyed with its callAsync still pending
+    pumpMessageLoop(200); // must not touch the destroyed engine
+    SUCCEED();
+}
+
+TEST_CASE("prepare() cancels an in-flight Learn result instead of applying it later")
+{
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    constexpr double sr = 48000.0;
+    constexpr int blockSize = 512;
+
+    DePumpAudioProcessor proc;
+    TestPlayHead playHead;
+    proc.setPlayHead(&playHead);
+    proc.setPlayConfigDetails(1, 1, sr, blockSize);
+    proc.prepareToPlay(sr, blockSize);
+    REQUIRE(learnUntilAnalysisDoneWithoutDispatch(proc, playHead, sr, blockSize));
+
+    proc.prepareToPlay(44100.0, blockSize); // sample-rate change -> engine prepare()
+    pumpMessageLoop(200);
+
+    CHECK(proc.getLearnEngineForTest().getStatus() == PluginLearnEngine::Status::idle);
+    // The stale result would have reset the Learn parameter to 0.
+    CHECK(proc.apvts.getRawParameterValue(ParamID::learn)->load() >= 0.5f);
+}

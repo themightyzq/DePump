@@ -68,6 +68,9 @@ PluginLearnEngine::PluginLearnEngine(juce::AudioProcessorValueTreeState& apvtsIn
 
 PluginLearnEngine::~PluginLearnEngine()
 {
+    // Before stopThread: results already queued via callAsync must go inert.
+    alive->store(false);
+    generation.fetch_add(1);
     stopThread(2000);
 }
 
@@ -76,6 +79,7 @@ void PluginLearnEngine::prepare(double sampleRateIn)
     sampleRate = sampleRateIn > 0.0 ? sampleRateIn : 44100.0;
     const int target = std::max(1, static_cast<int>(std::llround(captureSeconds * sampleRate)));
 
+    generation.fetch_add(1); // cancels any in-flight analysis result
     armed.store(false);
     captureComplete.store(false);
     capturedCount.store(0);
@@ -149,6 +153,7 @@ void PluginLearnEngine::finishCaptureAndAnalyze()
     if (status.load() != Status::capturing || !captureComplete.load())
         return;
 
+    const uint32_t startedGeneration = generation.load();
     status.store(Status::analyzing);
     statusMessage = "analyzing..."; // background thread only: safe to allocate here
 
@@ -169,25 +174,41 @@ void PluginLearnEngine::finishCaptureAndAnalyze()
     try
     {
         const auto analysis = depump::analyzePump(captured, sampleRate);
+        if (generation.load() != startedGeneration)
+            return; // prepare()/destruction cancelled this run: publish nothing
         if (!analysis.pumpDetected || !analysis.modelFitted)
         {
             statusMessage = analysis.pumpDetected
                                 ? "pump detected but no compressor-model fit; nothing applied"
                                 : "no pumping detected in the captured audio";
             status.store(Status::noPumpDetected);
-            juce::MessageManager::callAsync([this] { resetLearnParameterOnMessageThread(); });
+            postToMessageThread(startedGeneration, [this] { resetLearnParameterOnMessageThread(); });
             return;
         }
 
         const auto clamped = clampProfileToParameterRanges(analysis.fittedProfile);
-        juce::MessageManager::callAsync([this, clamped] { applyProfileOnMessageThread(clamped); });
+        postToMessageThread(startedGeneration, [this, clamped] { applyProfileOnMessageThread(clamped); });
     }
     catch (const std::exception& e)
     {
+        if (generation.load() != startedGeneration)
+            return;
         statusMessage = juce::String("error: ") + e.what();
         status.store(Status::error);
-        juce::MessageManager::callAsync([this] { resetLearnParameterOnMessageThread(); });
+        postToMessageThread(startedGeneration, [this] { resetLearnParameterOnMessageThread(); });
     }
+}
+
+void PluginLearnEngine::postToMessageThread(uint32_t startedGeneration, std::function<void()> work)
+{
+    // weak_ptr, not `this`, is what survives destruction: check it before any member access.
+    juce::MessageManager::callAsync([weakAlive = std::weak_ptr<std::atomic<bool>>(alive), this, startedGeneration,
+                                     work = std::move(work)] {
+        const auto liveFlag = weakAlive.lock();
+        if (liveFlag == nullptr || !liveFlag->load() || generation.load() != startedGeneration)
+            return;
+        work();
+    });
 }
 
 void PluginLearnEngine::applyProfileOnMessageThread(const ClampedProfile& clamped)

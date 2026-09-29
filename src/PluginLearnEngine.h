@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -49,8 +50,9 @@ public:
     ~PluginLearnEngine() override;
 
     // Sizes the capture ring buffer for the given sample rate and resets to
-    // idle, aborting any in-progress capture/analysis. Message-thread /
-    // prepareToPlay only — never call from processBlock.
+    // idle, aborting any in-progress capture/analysis: a result from an
+    // analysis that started before this call is discarded, never applied.
+    // Message-thread / prepareToPlay only — never call from processBlock.
     void prepare(double sampleRate);
 
     // Starts a capture immediately (synchronously resets the FIFO and flips
@@ -78,6 +80,7 @@ public:
 private:
     void run() override;
     void finishCaptureAndAnalyze();
+    void postToMessageThread(uint32_t startedGeneration, std::function<void()> work);
     void applyProfileOnMessageThread(const struct ClampedProfile& clamped);
     void resetLearnParameterOnMessageThread();
 
@@ -95,6 +98,12 @@ private:
 
     std::atomic<Status> status{Status::idle};
     juce::String statusMessage; // background/message thread only, see getStatusMessage()
+
+    // Liveness/cancellation for callAsync results: queued lambdas may run after
+    // this engine is destroyed (alive expired/false) or after prepare()
+    // restarted the workflow (generation changed); both make them no-ops.
+    std::shared_ptr<std::atomic<bool>> alive = std::make_shared<std::atomic<bool>>(true);
+    std::atomic<uint32_t> generation{0};
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PluginLearnEngine)
 };
