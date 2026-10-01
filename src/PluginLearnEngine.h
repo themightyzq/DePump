@@ -43,7 +43,8 @@ public:
         analyzing,
         applied,
         noPumpDetected,
-        error
+        error,
+        cancelled // the user cancelled a capture or an analysis; nothing was applied
     };
 
     // apvtsIn must outlive this engine (the owning AudioProcessor's apvts).
@@ -67,6 +68,14 @@ public:
     // instant exactly matches the first sample this call will accept.
     // Real-time safe. A no-op while already capturing or analyzing.
     void armFromMessageThread(int64_t captureStartTimelineSample) noexcept;
+
+    // Abandons a capture or an analysis that is in progress: nothing is applied, the status becomes
+    // `cancelled` and the Learn parameter goes back to 0. A no-op (returns false) in any other
+    // state. Message thread only (it writes the status text and the parameter, which the audio
+    // thread must never do). Cancellation rides the same generation counter as prepare() and
+    // destruction: a running analysis polls it and stops within a candidate evaluation, and a
+    // result already queued with callAsync goes inert. The liveness guard is unchanged.
+    bool cancel();
 
     // --- Audio-thread API ---
     void pushMonoSample(float sample) noexcept;
@@ -92,6 +101,7 @@ public:
         switch (status.load())
         {
             case Status::idle:
+            case Status::cancelled:
                 return 0.0f;
             case Status::capturing:
             {
@@ -120,6 +130,7 @@ private:
     void applyProfileOnMessageThread(const struct ClampedProfile& clamped);
     void resetLearnParameterOnMessageThread();
     void setStatusMessage(const juce::String& text);
+    void setStatusIfAnalyzing(Status next);
 
     juce::AudioProcessorValueTreeState& apvts;
     const double captureSeconds;

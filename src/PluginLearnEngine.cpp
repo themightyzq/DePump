@@ -159,7 +159,11 @@ void PluginLearnEngine::finishCaptureAndAnalyze()
 
     const uint32_t startedGeneration = generation.load();
     analysisProgress.store(0.0f);
-    status.store(Status::analyzing);
+    // Compare-and-swap, not a store: if cancel() got in first the status is `cancelled` and this
+    // run must not resurrect it.
+    Status expectedStatus = Status::capturing;
+    if (!status.compare_exchange_strong(expectedStatus, Status::analyzing))
+        return;
     setStatusMessage("analyzing..."); // background thread only: safe to allocate here
 
     const int count = std::min(capturedCount.load(), targetSamples.load());
@@ -198,7 +202,7 @@ void PluginLearnEngine::finishCaptureAndAnalyze()
         {
             setStatusMessage(analysis.pumpDetected ? "pump detected but no compressor-model fit; nothing applied"
                                                     : "no pumping detected in the captured audio");
-            status.store(Status::noPumpDetected);
+            setStatusIfAnalyzing(Status::noPumpDetected);
             postToMessageThread(startedGeneration, [this] { resetLearnParameterOnMessageThread(); });
             return;
         }
@@ -211,7 +215,7 @@ void PluginLearnEngine::finishCaptureAndAnalyze()
         if (generation.load() != startedGeneration)
             return;
         setStatusMessage(juce::String("error: ") + e.what());
-        status.store(Status::error);
+        setStatusIfAnalyzing(Status::error);
         postToMessageThread(startedGeneration, [this] { resetLearnParameterOnMessageThread(); });
     }
 }
@@ -247,6 +251,30 @@ void PluginLearnEngine::applyProfileOnMessageThread(const ClampedProfile& clampe
     setStatusMessage(summary);
     resetLearnParameterOnMessageThread();
     status.store(Status::applied);
+}
+
+// A finishing analysis must not overwrite `cancelled` (or anything else a concurrent cancel() or
+// prepare() decided): it may only move the status on from `analyzing`.
+void PluginLearnEngine::setStatusIfAnalyzing(Status next)
+{
+    Status expected = Status::analyzing;
+    status.compare_exchange_strong(expected, next);
+}
+
+bool PluginLearnEngine::cancel()
+{
+    const auto current = status.load();
+    if (current != Status::capturing && current != Status::analyzing)
+        return false;
+
+    generation.fetch_add(1); // stops a running analysis and makes queued results inert
+    armed.store(false);      // the audio thread stops writing into the capture buffer
+    captureComplete.store(false);
+    capturedCount.store(0);
+    setStatusMessage("cancelled");
+    status.store(Status::cancelled);
+    resetLearnParameterOnMessageThread();
+    return true;
 }
 
 void PluginLearnEngine::setStatusMessage(const juce::String& text)

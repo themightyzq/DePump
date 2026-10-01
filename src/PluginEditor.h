@@ -41,6 +41,7 @@ private:
 
     DePumpAudioProcessor& processor;
     std::unique_ptr<Content> content;
+    bool persistSize = false; // true once the saved size has been applied
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(DePumpAudioProcessorEditor)
 };

@@ -149,6 +149,14 @@ target_link_libraries(DePumpApp
         juce::juce_recommended_warning_flags
 )
 
+# The embedded typefaces are SIL OFL 1.1: ship the licence texts inside every built bundle
+# (Contents/Resources/licenses/), not only in the source tree.
+if(APPLE)
+    foreach(bundle_target DePump_VST3 DePump_AU DePump_Standalone DePumpApp)
+        juce_add_bundle_resources_directory(${bundle_target} "${CMAKE_CURRENT_SOURCE_DIR}/licenses")
+    endforeach()
+endif()
+
 # --- Headless UI render: the look-and-feel regression gate ---
 juce_add_console_app(depump_ui_snapshot PRODUCT_NAME "depump_ui_snapshot")
 

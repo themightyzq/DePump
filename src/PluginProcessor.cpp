@@ -382,6 +382,8 @@ void DePumpAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
     // Copy first: never mutate the live state tree from the host's calling thread.
     auto state = apvts.copyState();
     state.setProperty("engaged", engaged.load(), nullptr);
+    state.setProperty("editor_width", editorWidth.load(), nullptr);
+    state.setProperty("editor_height", editorHeight.load(), nullptr);
     if (auto xml = state.createXml())
         copyXmlToBinary(*xml, destData);
 }
@@ -395,6 +397,8 @@ void DePumpAudioProcessor::setStateInformation(const void* data, int sizeInBytes
             apvts.replaceState(juce::ValueTree::fromXml(*xml));
 
             engaged.store(static_cast<bool>(apvts.state.getProperty("engaged", false)));
+            editorWidth.store(juce::jmax(0, static_cast<int>(apvts.state.getProperty("editor_width", 0))));
+            editorHeight.store(juce::jmax(0, static_cast<int>(apvts.state.getProperty("editor_height", 0))));
             rebaselineModelParams.store(true); // don't treat the just-loaded values as a live edit
 
             if (auto* learnParam = apvts.getParameter(ParamID::learn))

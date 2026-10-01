@@ -107,6 +107,21 @@ TEST_CASE("Editor: every control is named, described, focusable and at least 22 
             CHECK(onScreen.getHeight() >= 22);
         });
         CHECK(controls >= 12); // 8 knobs + 2 combos + Learn + the About mark
+
+        // The knobs' value boxes are editable (click and type), so they are controls too.
+        int valueBoxes = 0;
+        forEachDescendant(*editor, [&](juce::Component& c) {
+            auto* label = dynamic_cast<juce::Label*>(&c);
+            if (label == nullptr || dynamic_cast<juce::Slider*>(label->getParentComponent()) == nullptr)
+                return;
+            ++valueBoxes; // includes the dimmed Free Rate box: it becomes editable again in Free mode
+            const auto onScreen = editor->getLocalArea(label, label->getLocalBounds());
+            INFO("scale " << scale << " value box of '" << label->getParentComponent()->getTitle() << "' is "
+                          << onScreen.getWidth() << " x " << onScreen.getHeight());
+            CHECK(onScreen.getWidth() >= 22);
+            CHECK(onScreen.getHeight() >= 22);
+        });
+        CHECK(valueBoxes == 8);
     }
 }
 
@@ -140,6 +155,22 @@ TEST_CASE("Editor: knob readouts show real units, whole numbers where the parame
     CHECK(readout("Depth") == "9.0 dB");
     CHECK(readout("Output") == "-3.0 dB");
     CHECK(readout("Phase") == "+12.5 %");
+}
+
+TEST_CASE("Editor: the widest knob readouts fit inside their value boxes")
+{
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    ui::LookAndFeel look;
+    const auto font = look.lcdFont(17.0f);
+    // Widest text each readout can show at its parameter's range ends. The box is 68 px wide;
+    // leave 6 px for the screen border.
+    for (auto text : {"-24.0 dB", "+12.0 dB", "24.0 dB", "8.00 Hz", "+50.0 %", "-50.0 %", "100.0 ms", "500 ms", "400 ms", "100 %"})
+    {
+        INFO(text);
+        juce::GlyphArrangement glyphs;
+        glyphs.addLineOfText(font, text, 0.0f, 0.0f);
+        CHECK(glyphs.getBoundingBox(0, -1, true).getWidth() <= 62.0f);
+    }
 }
 
 TEST_CASE("Editor: the Free Rate knob is dimmed in Sync mode and the Rate box in Free mode")
@@ -322,4 +353,114 @@ TEST_CASE("Editor snapshot (only when DEPUMP_EDITOR_SNAPSHOT names a PNG to writ
         REQUIRE(stream.openedOk());
         CHECK(png.writeImageToStream(image, stream));
     }
+}
+
+TEST_CASE("Editor: the window size is restored from the saved state and clamped to the limits")
+{
+    juce::ScopedJuceInitialiser_GUI juceInit;
+
+    // The editor writes its size back to the processor whenever it is resized.
+    {
+        DePumpAudioProcessor proc;
+        std::unique_ptr<juce::AudioProcessorEditor> editor(proc.createEditor());
+        CHECK(proc.getEditorWidth() == DePumpAudioProcessorEditor::kDesignWidth);
+        editor->setSize(800, 425);
+        CHECK(proc.getEditorWidth() == 800);
+        CHECK(proc.getEditorHeight() == 425);
+    }
+
+    // A fresh instance restored from that state reopens at that size.
+    DePumpAudioProcessor saved;
+    saved.setEditorSize(800, 425);
+    juce::MemoryBlock state;
+    saved.getStateInformation(state);
+
+    DePumpAudioProcessor restored;
+    restored.setStateInformation(state.getData(), (int) state.getSize());
+    {
+        std::unique_ptr<juce::AudioProcessorEditor> editor(restored.createEditor());
+        CHECK(editor->getWidth() == 800);
+        CHECK(editor->getHeight() == 425);
+    }
+    CHECK(restored.getEditorWidth() == 800); // opening did not reset what was saved
+
+    // Absurd saved sizes are clamped; the aspect ratio follows the width.
+    DePumpAudioProcessor huge;
+    huge.setEditorSize(9000, 100);
+    {
+        std::unique_ptr<juce::AudioProcessorEditor> editor(huge.createEditor());
+        CHECK(editor->getWidth() == juce::roundToInt(DePumpAudioProcessorEditor::kDesignWidth * DePumpAudioProcessorEditor::kMaxScale));
+        CHECK(editor->getHeight() == juce::roundToInt(editor->getWidth() * (double) DePumpAudioProcessorEditor::kDesignHeight / DePumpAudioProcessorEditor::kDesignWidth));
+    }
+    DePumpAudioProcessor tiny;
+    tiny.setEditorSize(10, 10);
+    {
+        std::unique_ptr<juce::AudioProcessorEditor> editor(tiny.createEditor());
+        CHECK(editor->getWidth() == juce::roundToInt(DePumpAudioProcessorEditor::kDesignWidth * DePumpAudioProcessorEditor::kMinScale));
+    }
+
+    // Nothing saved: the default size.
+    DePumpAudioProcessor fresh;
+    std::unique_ptr<juce::AudioProcessorEditor> editor(fresh.createEditor());
+    CHECK(editor->getWidth() == DePumpAudioProcessorEditor::kDesignWidth);
+    CHECK(editor->getHeight() == DePumpAudioProcessorEditor::kDesignHeight);
+}
+
+TEST_CASE("Editor: the Learn button is Cancel while Learn is busy, and the status line says cancelled")
+{
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    constexpr double sr = 48000.0;
+    constexpr int blockSize = 512;
+
+    DePumpAudioProcessor proc;
+    TestPlayHead playHead;
+    proc.setPlayHead(&playHead);
+    proc.setPlayConfigDetails(1, 1, sr, blockSize);
+    proc.prepareToPlay(sr, blockSize);
+
+    std::unique_ptr<juce::AudioProcessorEditor> owner(proc.createEditor());
+    auto* editor = dynamic_cast<DePumpAudioProcessorEditor*>(owner.get());
+    REQUIRE(editor != nullptr);
+
+    juce::TextButton* learn = nullptr;
+    forEachDescendant(*editor, [&](juce::Component& c) {
+        if (auto* b = dynamic_cast<juce::TextButton*>(&c))
+            learn = b;
+    });
+    REQUIRE(learn != nullptr);
+    CHECK(learn->getButtonText() == "Learn");
+
+    const auto signal = makePumpedChord(sr, 6.0, true);
+    auto feed = [&](size_t from, size_t to) {
+        juce::MidiBuffer midi;
+        for (size_t pos = from; pos < to; pos += (size_t) blockSize)
+        {
+            const int n = (int) std::min<size_t>((size_t) blockSize, to - pos);
+            juce::AudioBuffer<float> buffer(1, n);
+            for (int i = 0; i < n; ++i)
+                buffer.setSample(0, i, signal[pos + (size_t) i]);
+            proc.processBlock(buffer, midi);
+            playHead.sample += n;
+        }
+    };
+
+    learn->triggerClick(); // press Learn (delivered asynchronously)
+    pumpMessages(50);
+    feed(0, (size_t) (1.5 * sr));
+    pumpMessages(150);
+    CHECK(editor->getStatusTextForTest().startsWith("Listening"));
+    CHECK(learn->getButtonText() == "Cancel");
+    CHECK(learn->getTitle() == "Cancel Learn");
+
+    learn->triggerClick(); // press it again: Cancel
+    pumpMessages(200);
+    CHECK(editor->getStatusTextForTest().startsWith("Cancelled"));
+    CHECK(learn->getButtonText() == "Learn");
+    CHECK(learn->getTitle() == "Learn");
+    CHECK(proc.apvts.getRawParameterValue(ParamID::learn)->load() < 0.5f);
+
+    feed((size_t) (1.5 * sr), signal.size());
+    pumpMessages(400);
+    CHECK(editor->getStatusTextForTest().startsWith("Cancelled")); // no late result
+    CHECK_FALSE(proc.isEngagedForTest());
 }

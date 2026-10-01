@@ -67,6 +67,21 @@ public:
     // Read-only view for the editor's status line (message thread).
     const PluginLearnEngine& getLearnEngine() const noexcept { return learnEngine; }
 
+    // Cancels a Learn that is capturing or analysing (message thread). Returns false when idle.
+    bool cancelLearn() { return learnEngine.cancel(); }
+
+    // Editor window size, persisted in the plugin state as plain tree properties (never
+    // parameters), the same way the other ZQ SFX products do it. 0 = not saved yet. Message
+    // thread only: written by the editor's resized(), read by its constructor and by
+    // getStateInformation().
+    int getEditorWidth() const noexcept { return editorWidth.load(); }
+    int getEditorHeight() const noexcept { return editorHeight.load(); }
+    void setEditorSize(int width, int height) noexcept
+    {
+        editorWidth.store(width);
+        editorHeight.store(height);
+    }
+
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
     float computeRateHz(double bpm, float currentFreeRateHz) const noexcept;
@@ -104,6 +119,9 @@ private:
     std::atomic<int64_t> captureStartSample{0};
 
     double preparedSampleRate = -1.0;
+
+    std::atomic<int> editorWidth{0};
+    std::atomic<int> editorHeight{0};
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(DePumpAudioProcessor)
 };

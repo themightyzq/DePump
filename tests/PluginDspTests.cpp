@@ -636,3 +636,153 @@ TEST_CASE("Learn reports capture progress and a readable result")
     CHECK(message.fromFirstOccurrenceOf("release ", false, false).upToFirstOccurrenceOf(" ms", false, false)
               .containsOnly("0123456789"));
 }
+
+// ---------------------------------------------------------------------------------------------
+// Cancelling a Learn.
+// ---------------------------------------------------------------------------------------------
+TEST_CASE("Cancelling a Learn while it is capturing applies nothing, and Learn works again afterwards")
+{
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    constexpr double sr = 48000.0;
+    constexpr int blockSize = 512;
+
+    DePumpAudioProcessor proc;
+    TestPlayHead playHead;
+    proc.setPlayHead(&playHead);
+    proc.setPlayConfigDetails(1, 1, sr, blockSize);
+    proc.prepareToPlay(sr, blockSize);
+    auto& engine = proc.getLearnEngineForTest();
+
+    CHECK_FALSE(proc.cancelLearn()); // nothing to cancel while idle
+    CHECK(engine.getStatus() == PluginLearnEngine::Status::idle);
+
+    const depump::PumpProfile profile{4.0f, 9.0f, 10.0f, 60.0f, 150.0f, 0.25f};
+    const auto pumped = makePumped(makeCleanChord(sr, 6.0), profile, sr);
+    const auto half = static_cast<long>(1.5 * sr);
+
+    playHead.sample = 0;
+    proc.apvts.getParameter(ParamID::learn)->setValueNotifyingHost(1.0f);
+    runThroughProcessor(proc, playHead, std::vector<float>(pumped.begin(), pumped.begin() + half), blockSize);
+    REQUIRE(engine.getStatus() == PluginLearnEngine::Status::capturing);
+
+    REQUIRE(proc.cancelLearn());
+    CHECK(engine.getStatus() == PluginLearnEngine::Status::cancelled);
+    CHECK(engine.getStatusMessage() == "cancelled");
+    CHECK(engine.getProgress() == 0.0f);
+    CHECK(proc.apvts.getRawParameterValue(ParamID::learn)->load() < 0.5f);
+    CHECK_FALSE(proc.cancelLearn()); // already cancelled
+
+    // The rest of the audio goes through: no capture completes, nothing is analysed or applied.
+    runThroughProcessor(proc, playHead, std::vector<float>(pumped.begin() + half, pumped.end()), blockSize);
+    pumpMessageLoop(400);
+    CHECK(engine.getStatus() == PluginLearnEngine::Status::cancelled);
+    CHECK_FALSE(proc.isEngagedForTest());
+
+    // A fresh Learn is accepted and completes (a block ran with Learn at 0, so this is a new edge).
+    playHead.sample = 0;
+    proc.apvts.getParameter(ParamID::learn)->setValueNotifyingHost(1.0f);
+    auto status = feedWhileLearning(proc, playHead, pumped, blockSize);
+    if (status != PluginLearnEngine::Status::applied)
+        status = waitForTerminalStatus(proc, 30000);
+    CHECK(status == PluginLearnEngine::Status::applied);
+}
+
+TEST_CASE("Cancelling a Learn while it is analysing stops the analysis and nothing is applied")
+{
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    constexpr double sr = 48000.0;
+    constexpr int blockSize = 512;
+
+    DePumpAudioProcessor proc;
+    TestPlayHead playHead;
+    proc.setPlayHead(&playHead);
+    proc.setPlayConfigDetails(1, 1, sr, blockSize);
+    proc.prepareToPlay(sr, blockSize);
+    auto& engine = proc.getLearnEngineForTest();
+
+    const depump::PumpProfile profile{4.0f, 9.0f, 10.0f, 60.0f, 150.0f, 0.25f};
+    const auto pumped = makePumped(makeCleanChord(sr, 6.0), profile, sr);
+
+    std::array<float, 6> before{};
+    const std::array<const char*, 6> ids{ParamID::freeRate, ParamID::depth, ParamID::phase,
+                                          ParamID::attack,  ParamID::hold,  ParamID::release};
+    for (size_t i = 0; i < ids.size(); ++i)
+        before[i] = proc.apvts.getRawParameterValue(ids[i])->load();
+
+    playHead.sample = 0;
+    proc.apvts.getParameter(ParamID::learn)->setValueNotifyingHost(1.0f);
+    runThroughProcessor(proc, playHead, pumped, blockSize);
+
+    const auto deadline = juce::Time::getMillisecondCounter() + 10000u;
+    while (engine.getStatus() != PluginLearnEngine::Status::analyzing && juce::Time::getMillisecondCounter() < deadline)
+        juce::Thread::sleep(1);
+    REQUIRE(engine.getStatus() == PluginLearnEngine::Status::analyzing);
+    juce::Thread::sleep(30);
+
+    const auto start = std::chrono::steady_clock::now();
+    REQUIRE(proc.cancelLearn());
+    const auto ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    INFO("cancel() took " << ms << " ms");
+    CHECK(ms < 100.0); // it signals the analysis thread, it does not wait for it
+    CHECK(engine.getStatus() == PluginLearnEngine::Status::cancelled);
+
+    // Give a non-cancelled analysis ample time to finish and apply: it must not.
+    pumpMessageLoop(2500);
+    CHECK(engine.getStatus() == PluginLearnEngine::Status::cancelled);
+    processSilenceBlock(proc, blockSize);
+    CHECK_FALSE(proc.isEngagedForTest());
+    for (size_t i = 0; i < ids.size(); ++i)
+        CHECK(proc.apvts.getRawParameterValue(ids[i])->load() == Catch::Approx(before[i]));
+    CHECK(proc.apvts.getRawParameterValue(ParamID::learn)->load() < 0.5f);
+
+    // The analysis thread is free again: a new Learn runs to completion.
+    playHead.sample = 0;
+    proc.apvts.getParameter(ParamID::learn)->setValueNotifyingHost(1.0f);
+    auto status = feedWhileLearning(proc, playHead, pumped, blockSize);
+    if (status != PluginLearnEngine::Status::applied)
+        status = waitForTerminalStatus(proc, 30000);
+    CHECK(status == PluginLearnEngine::Status::applied);
+}
+
+TEST_CASE("The editor size is saved in the plugin state (not as a parameter)")
+{
+    juce::ScopedJuceInitialiser_GUI juceInit;
+
+    DePumpAudioProcessor first;
+    const auto parameterCount = first.getParameters().size();
+    CHECK(first.getEditorWidth() == 0); // nothing saved yet
+
+    juce::MemoryBlock state;
+    first.setEditorSize(800, 425);
+    first.getStateInformation(state);
+    REQUIRE(state.getSize() > 0);
+
+    // The size travels as plain tree properties, next to "engaged".
+    auto xml = juce::AudioProcessor::getXmlFromBinary(state.getData(), (int) state.getSize());
+    REQUIRE(xml != nullptr);
+    CHECK(xml->getIntAttribute("editor_width") == 800);
+    CHECK(xml->getIntAttribute("editor_height") == 425);
+
+    DePumpAudioProcessor second;
+    CHECK(second.getParameters().size() == parameterCount);
+    CHECK(second.apvts.getParameter("editor_width") == nullptr);
+    second.setStateInformation(state.getData(), (int) state.getSize());
+    CHECK(second.getEditorWidth() == 800);
+    CHECK(second.getEditorHeight() == 425);
+
+    // A session saved before this existed (no properties) restores as "unset", not as 0 x 0 windows.
+    DePumpAudioProcessor third;
+    third.setEditorSize(900, 478);
+    juce::MemoryBlock oldState;
+    DePumpAudioProcessor legacy;
+    legacy.getStateInformation(oldState);
+    if (auto legacyXml = juce::AudioProcessor::getXmlFromBinary(oldState.getData(), (int) oldState.getSize()))
+    {
+        legacyXml->removeAttribute("editor_width");
+        legacyXml->removeAttribute("editor_height");
+        juce::MemoryBlock stripped;
+        juce::AudioProcessor::copyXmlToBinary(*legacyXml, stripped);
+        third.setStateInformation(stripped.getData(), (int) stripped.getSize());
+    }
+    CHECK(third.getEditorWidth() == 0);
+}

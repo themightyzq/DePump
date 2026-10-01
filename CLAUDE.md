@@ -95,8 +95,12 @@ CMakeLists.txt; spec in ../docs/ZQSFX_UI_STYLE_GUIDE.md). Rules specific to DePu
   because `zqsfx::ui::Knob` does not do it.
 - `learn` is meta and not automatable. The safety clip in `processBlock` is transparent up to
   -1 dBFS. A host position that repeats block after block is treated as no position.
-- The three embedded typefaces are SIL OFL 1.1; their licence texts live in `licenses/` and are
-  credited in README.md.
+- The three embedded typefaces are SIL OFL 1.1; their licence texts live in `licenses/`, are
+  credited in README.md, and are copied into every macOS bundle's Resources by CMake
+  (`juce_add_bundle_resources_directory`).
+- The Learn button doubles as Cancel while the engine is capturing or analysing
+  (`PluginLearnEngine::cancel()`, same generation counter as `prepare()`/destruction). The
+  editor size is saved as `editor_width`/`editor_height` tree properties, never parameters.
 
 ## Definition of done (decided by owner, 2026-07-09)
 A change is done when: unit tests pass; pluginval at strictness 10

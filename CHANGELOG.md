@@ -23,3 +23,10 @@
   the analysis at once instead of waiting for it, or forcing the thread down after 2 seconds.
 - Fonts: the three embedded typefaces (SIL OFL 1.1) are credited in the README and their
   licence texts are in the licenses folder.
+- Plugin: the Learn button becomes Cancel while Learn is listening or analysing. Cancelling
+  applies nothing, puts the Learn parameter back to 0 and shows "Cancelled" in the status line.
+- Plugin: the window size is saved in the plugin state (editor_width, editor_height; not
+  parameters) and restored, clamped to the allowed range.
+- Plugin: the knob value boxes are 25 px tall (they were 16 px, under the 22 px target size).
+- macOS bundles (VST3, AU, Standalone, DePump.app) now carry the OFL licence texts in
+  Contents/Resources/licenses.

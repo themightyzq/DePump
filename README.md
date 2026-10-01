@@ -13,8 +13,9 @@ of audio, analyze it off-thread, and if a pump is detected, fit and apply
 the model to freeRate, depth, attack, hold, release, and phase with no added
 latency. If no pump is detected, the plugin remains a pass-through. The
 plugin window shows the Learn status as it goes (listening, analysing with a
-progress bar, learned, or the reason it failed). Learn is not automatable, so
-host automation cannot start it.
+progress bar, learned, or the reason it failed). Press the button again while it
+is listening or analysing to cancel: nothing is applied and the status line says
+cancelled. Learn is not automatable, so host automation cannot start it.
 
 ## Install
 
@@ -54,7 +55,8 @@ depump_render --batch IN_DIR --out-dir OUT_DIR
   the correction runs on its own clock instead of restarting every block. A
   host that reports no position is treated the same way.
 - The plugin window scales uniformly from 90 to 150 percent of its default
-  size.
+  size, and reopens at the size it was saved with (the size is stored in the
+  plugin state, not as a parameter).
 
 ## Build from source
 
@@ -95,7 +97,8 @@ GPL-3.0-or-later. See LICENSE. Built with JUCE.
 
 The window and app use the ZQ SFX house UI. It embeds three typefaces under
 the SIL Open Font License 1.1: Barlow Condensed, VT323 and IBM Plex Mono. The
-licence texts are in the licenses folder. The knob artwork is CC0 (KnobGallery,
+licence texts are in the licenses folder and inside each built macOS bundle,
+under Contents/Resources/licenses. The knob artwork is CC0 (KnobGallery,
 by SolurOathLabs, dh96 and C. Anders).
 
 ZQ SFX, https://www.zq-sfx.com, connect@zq-sfx.com.

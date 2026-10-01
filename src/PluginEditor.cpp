@@ -17,7 +17,8 @@ enum class StatusKind
     busy,     // filled circle, accent
     learned,  // filled circle, green
     nothing,  // filled circle, sky: ran fine, found no pump
-    failed    // filled square, warn
+    failed,   // filled square, warn
+    cancelled // hollow square
 };
 
 juce::String formatValue(double value, int decimals, const juce::String& unit, bool showPlus = false)
@@ -41,6 +42,26 @@ juce::StringArray choicesOf(juce::AudioProcessorValueTreeState& apvts, const cha
     jassertfalse;
     return {};
 }
+
+//==============================================================================
+// The house look, with one change: the knobs' value boxes are 25 px tall (a real hit target),
+// and the module sizes their text from the box height, which would make it too big to fit
+// "10.0 ms". Draw those readouts at a fixed LCD size instead.
+class EditorLookAndFeel : public ui::LookAndFeel
+{
+public:
+    void drawLabel(juce::Graphics& g, juce::Label& label) override
+    {
+        if (dynamic_cast<juce::Slider*>(label.getParentComponent()) != nullptr)
+        {
+            ui::LookAndFeel::drawScreen(g, label.getLocalBounds().toFloat(), false);
+            if (!label.isBeingEdited())
+                drawLcdText(g, label.getText(), label.getLocalBounds(), 17.0f, juce::Justification::centred);
+            return;
+        }
+        ui::LookAndFeel::drawLabel(g, label);
+    }
+};
 
 //==============================================================================
 // The screen under the Learn button: a phosphor-glass readout with a marker, up to two lines of
@@ -100,6 +121,10 @@ public:
                 g.setColour(ui::colour::warn);
                 g.fillRect(markerBox);
                 break;
+            case StatusKind::cancelled:
+                g.setColour(ui::colour::lcdText);
+                g.drawRect(markerBox.reduced(0.5f), 1.5f);
+                break;
         }
         area.removeFromLeft(8);
 
@@ -152,8 +177,9 @@ public:
         : processor(p),
           learnButton(p.apvts, ParamID::learn, "Learn",
                       "Listens to the next few seconds of audio, finds the pumping and sets the model controls "
-                      "to match. Start playback first.",
-                      false, "Learning..."),
+                      "to match. Start playback first. While it is listening or analysing, this button "
+                      "becomes Cancel.",
+                      false, "Cancel"),
           modeCombo(p.apvts, ParamID::syncMode, choicesOf(p.apvts, ParamID::syncMode), "Mode",
                     "Sync follows the host tempo and the Rate note value. Free uses the Free Rate in Hz, "
                     "which hosts without a tempo need."),
@@ -206,6 +232,10 @@ public:
         logo.onClick = [this] { showAbout(); };
         addAndMakeVisible(logo);
 
+        // The attachment turns the button into the Learn parameter. While Learn is busy the same
+        // press is a Cancel: the engine abandons the work, nothing is applied, the parameter is
+        // put back to 0 and the status line says so. When Learn is idle this is a no-op.
+        learnButton.button.onClick = [this] { processor.cancelLearn(); };
         addAndMakeVisible(learnButton);
         addAndMakeVisible(status);
 
@@ -217,6 +247,10 @@ public:
             // A rotary slider does not take keyboard focus by default; without this the focus
             // ring never reaches the knobs and they cannot be set from the keyboard.
             knob->slider.setWantsKeyboardFocus(true);
+            // The value box is an editable control (click to type a value), so it gets a real hit
+            // target: the module's default is 16 px tall, under the 22 px floor, and the editor can
+            // be scaled down to 0.9x, so draw it 25 px tall.
+            knob->slider.setTextBoxStyle(juce::Slider::TextBoxBelow, false, 68, kValueBoxHeight);
             addAndMakeVisible(*knob);
         }
 
@@ -229,6 +263,15 @@ public:
         const auto& engine = processor.getLearnEngine();
         const auto engineStatus = engine.getStatus();
         const float progress = engine.getProgress();
+
+        // Learn button: Cancel while there is something to cancel.
+        const bool busy = engineStatus == PluginLearnEngine::Status::capturing
+                          || engineStatus == PluginLearnEngine::Status::analyzing;
+        if (static_cast<int>(busy) != lastBusy)
+        {
+            lastBusy = static_cast<int>(busy);
+            learnButton.button.setTitle(busy ? "Cancel Learn" : "Learn");
+        }
 
         switch (engineStatus)
         {
@@ -264,6 +307,11 @@ public:
 
             case PluginLearnEngine::Status::noPumpDetected:
                 status.setState(StatusKind::nothing, "Nothing learned: " + engine.getStatusMessage() + ".", 1.0f, false);
+                break;
+
+            case PluginLearnEngine::Status::cancelled:
+                status.setState(StatusKind::cancelled, "Cancelled. Nothing was changed. Press Learn to start again.",
+                                0.0f, false);
                 break;
 
             case PluginLearnEngine::Status::error:
@@ -364,7 +412,7 @@ private:
 
     // One shared instance for every open editor in this process, kept alive by the editors
     // that use it. Never the process-wide default look and feel.
-    juce::SharedResourcePointer<ui::LookAndFeel> houseLookAndFeel;
+    juce::SharedResourcePointer<EditorLookAndFeel> houseLookAndFeel;
 
     ui::Panel learnPanel{"Learn"};
     ui::Panel outputPanel{"Output"};
@@ -379,6 +427,8 @@ private:
     ui::Knob freeRateKnob, depthKnob, phaseKnob, attackKnob, holdKnob, releaseKnob;
     ui::Knob amountKnob, outputKnob;
 
+    static constexpr int kValueBoxHeight = 25;
+    int lastBusy = -1;
     int lastSyncMode = -1; // -1 until the first refresh() has applied the Sync/Free dimming
     // Declared last so it goes first: nothing above can still be showing a tooltip.
     juce::TooltipWindow tooltips{this, 500};
@@ -404,7 +454,16 @@ DePumpAudioProcessorEditor::DePumpAudioProcessorEditor(DePumpAudioProcessor& pro
     setResizeLimits(juce::roundToInt(kDesignWidth * kMinScale), juce::roundToInt(kDesignHeight * kMinScale),
                     juce::roundToInt(kDesignWidth * kMaxScale), juce::roundToInt(kDesignHeight * kMaxScale));
     getConstrainer()->setFixedAspectRatio(static_cast<double>(kDesignWidth) / static_cast<double>(kDesignHeight));
-    setSize(kDesignWidth, kDesignHeight);
+
+    // Reopen at the size the session was saved with (clamped to the limits; the height follows
+    // the width so the aspect ratio holds). Nothing is written back until this is done.
+    int startWidth = kDesignWidth;
+    if (processor.getEditorWidth() > 0)
+        startWidth = juce::jlimit(juce::roundToInt(kDesignWidth * kMinScale), juce::roundToInt(kDesignWidth * kMaxScale),
+                                  processor.getEditorWidth());
+    setSize(startWidth, juce::roundToInt(static_cast<double>(startWidth) * kDesignHeight / kDesignWidth));
+    persistSize = true;
+    processor.setEditorSize(getWidth(), getHeight()); // the window now is what the session will save
 
     startTimerHz(15);
 }
@@ -428,6 +487,9 @@ void DePumpAudioProcessorEditor::resized()
                                    static_cast<float>(getHeight()) / static_cast<float>(kDesignHeight));
     content->setTransform(juce::AffineTransform::scale(scale));
     content->setBounds(0, 0, kDesignWidth, kDesignHeight);
+
+    if (persistSize && getWidth() > 0 && getHeight() > 0)
+        processor.setEditorSize(getWidth(), getHeight());
 }
 
 void DePumpAudioProcessorEditor::timerCallback()
