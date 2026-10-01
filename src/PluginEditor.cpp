@@ -497,6 +497,11 @@ void DePumpAudioProcessorEditor::timerCallback()
     content->refresh();
 }
 
+void DePumpAudioProcessorEditor::refreshForTest()
+{
+    content->refresh();
+}
+
 juce::String DePumpAudioProcessorEditor::getStatusTextForTest() const
 {
     return content->getStatusText();

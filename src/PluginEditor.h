@@ -34,6 +34,10 @@ public:
     // What the status line currently shows, for tests and screen readers.
     juce::String getStatusTextForTest() const;
 
+    // Runs the same refresh the 15 Hz timer runs, now, on the calling (message) thread. Tests use
+    // it instead of waiting on the timer, whose firing under a loaded CI runner is not guaranteed.
+    void refreshForTest();
+
 private:
     class Content;
 

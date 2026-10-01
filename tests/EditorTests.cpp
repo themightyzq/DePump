@@ -52,6 +52,17 @@ void pumpMessages(int ms)
     juce::MessageManager::getInstance()->runDispatchLoopUntil(ms);
 }
 
+// Pumps the message loop until `condition` holds, failing (returning false) only after a generous
+// deadline. A fixed short pump is a race on a loaded CI runner; this waits exactly as long as the
+// state needs and no longer.
+bool pumpUntil(const std::function<bool()>& condition, int timeoutMs = 5000)
+{
+    const auto deadline = juce::Time::getMillisecondCounter() + (juce::uint32) timeoutMs;
+    while (!condition() && juce::Time::getMillisecondCounter() < deadline)
+        pumpMessages(10);
+    return condition();
+}
+
 std::vector<float> makePumpedChord(double sr, double seconds, bool pumped)
 {
     std::vector<float> samples(static_cast<size_t>(sr * seconds));
@@ -177,6 +188,42 @@ TEST_CASE("Editor: the Free Rate knob is dimmed in Sync mode and the Rate box in
 {
     juce::ScopedJuceInitialiser_GUI juceInit;
     DePumpAudioProcessor proc;
+    auto* editor = dynamic_cast<DePumpAudioProcessorEditor*>(proc.createEditor());
+    REQUIRE(editor != nullptr);
+    std::unique_ptr<juce::AudioProcessorEditor> owner(editor);
+
+    auto alphaOf = [&](const juce::String& title) {
+        float alpha = -1.0f;
+        forEachDescendant(*editor, [&](juce::Component& c) {
+            if (c.getTitle() == title && (dynamic_cast<juce::Slider*>(&c) != nullptr || dynamic_cast<juce::ComboBox*>(&c) != nullptr))
+                alpha = c.getAlpha();
+        });
+        return alpha;
+    };
+
+    // The editor applies the dimming from refresh(), which its 15 Hz timer calls. The test calls
+    // refresh() itself rather than waiting for the timer: a loaded CI runner can starve the
+    // timer past any fixed pump time.
+    editor->refreshForTest(); // default is Sync
+    CHECK(alphaOf("Free Rate") < 0.5f);
+    CHECK(alphaOf("Rate") == 1.0f);
+
+    auto* mode = proc.apvts.getParameter(ParamID::syncMode);
+    mode->setValueNotifyingHost(1.0f); // Free
+    editor->refreshForTest();
+    CHECK(alphaOf("Free Rate") == 1.0f);
+    CHECK(alphaOf("Rate") < 0.5f);
+
+    mode->setValueNotifyingHost(0.0f); // and back to Sync
+    editor->refreshForTest();
+    CHECK(alphaOf("Free Rate") < 0.5f);
+    CHECK(alphaOf("Rate") == 1.0f);
+}
+
+TEST_CASE("Editor: its own timer applies the Sync/Free dimming without being called")
+{
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    DePumpAudioProcessor proc;
     std::unique_ptr<juce::AudioProcessorEditor> editor(proc.createEditor());
 
     auto alphaOf = [&](const juce::String& title) {
@@ -188,15 +235,12 @@ TEST_CASE("Editor: the Free Rate knob is dimmed in Sync mode and the Rate box in
         return alpha;
     };
 
-    pumpMessages(120); // default is Sync
-    CHECK(alphaOf("Free Rate") < 0.5f);
-    CHECK(alphaOf("Rate") == 1.0f);
+    // Never calls refreshForTest(): this is the one test that proves the 15 Hz timer drives it.
+    proc.apvts.getParameter(ParamID::syncMode)->setValueNotifyingHost(1.0f); // Free
+    CHECK(pumpUntil([&] { return alphaOf("Free Rate") == 1.0f && alphaOf("Rate") < 0.5f; }));
 
-    auto* mode = proc.apvts.getParameter(ParamID::syncMode);
-    mode->setValueNotifyingHost(1.0f); // Free
-    pumpMessages(150);
-    CHECK(alphaOf("Free Rate") == 1.0f);
-    CHECK(alphaOf("Rate") < 0.5f);
+    proc.apvts.getParameter(ParamID::syncMode)->setValueNotifyingHost(0.0f); // Sync
+    CHECK(pumpUntil([&] { return alphaOf("Free Rate") < 0.5f && alphaOf("Rate") == 1.0f; }));
 }
 
 TEST_CASE("Editor: sizes uniformly and keeps all content inside the window")
@@ -243,7 +287,7 @@ TEST_CASE("Editor: the status line follows Learn from ready to learned, and repo
     REQUIRE(editor != nullptr);
     std::unique_ptr<juce::AudioProcessorEditor> owner(editor);
 
-    pumpMessages(150);
+    editor->refreshForTest();
     CHECK(editor->getStatusTextForTest().startsWith("Ready"));
 
     auto feed = [&](const std::vector<float>& signal, size_t from, size_t to) {
@@ -270,19 +314,21 @@ TEST_CASE("Editor: the status line follows Learn from ready to learned, and repo
         proc.apvts.getParameter(ParamID::learn)->setValueNotifyingHost(1.0f);
 
         feed(signal, 0, (size_t) (1.5 * sr));
-        pumpMessages(150);
-        const auto listening = editor->getStatusTextForTest();
-        INFO("while capturing: " << listening);
-        CHECK(listening.startsWith("Listening"));
+        CHECK(pumpUntil([&] {
+            editor->refreshForTest();
+            return editor->getStatusTextForTest().startsWith("Listening");
+        }));
+        INFO("while capturing: " << editor->getStatusTextForTest());
 
         feed(signal, (size_t) (1.5 * sr), signal.size());
         const auto deadline = juce::Time::getMillisecondCounter() + 30000u;
         auto terminal = [&] {
+            editor->refreshForTest();
             const auto t = editor->getStatusTextForTest();
             return t.startsWith("Learned") || t.startsWith("Nothing learned") || t.startsWith("Learn failed");
         };
         while (!terminal() && juce::Time::getMillisecondCounter() < deadline)
-            pumpMessages(30);
+            pumpMessages(10);
 
         const auto finished = editor->getStatusTextForTest();
         INFO("after analysis (pumped=" << (int) pumped << "): " << finished);
@@ -343,8 +389,10 @@ TEST_CASE("Editor snapshot (only when DEPUMP_EDITOR_SNAPSHOT names a PNG to writ
     {
         juce::ScopedJuceInitialiser_GUI juceInit;
         DePumpAudioProcessor proc;
-        std::unique_ptr<juce::AudioProcessorEditor> editor(proc.createEditor());
-        pumpMessages(100);
+        auto* snapshotEditor = dynamic_cast<DePumpAudioProcessorEditor*>(proc.createEditor());
+        REQUIRE(snapshotEditor != nullptr);
+        std::unique_ptr<juce::AudioProcessorEditor> editor(snapshotEditor);
+        snapshotEditor->refreshForTest();
         const auto image = editor->createComponentSnapshot(editor->getLocalBounds(), true, 2.0f);
         juce::File out(path);
         out.deleteFile();
@@ -445,22 +493,26 @@ TEST_CASE("Editor: the Learn button is Cancel while Learn is busy, and the statu
     };
 
     learn->triggerClick(); // press Learn (delivered asynchronously)
-    pumpMessages(50);
+    REQUIRE(pumpUntil([&] { return proc.apvts.getRawParameterValue(ParamID::learn)->load() >= 0.5f; }));
     feed(0, (size_t) (1.5 * sr));
-    pumpMessages(150);
-    CHECK(editor->getStatusTextForTest().startsWith("Listening"));
-    CHECK(learn->getButtonText() == "Cancel");
-    CHECK(learn->getTitle() == "Cancel Learn");
+    CHECK(pumpUntil([&] {
+        editor->refreshForTest();
+        return editor->getStatusTextForTest().startsWith("Listening") && learn->getButtonText() == "Cancel" &&
+               learn->getTitle() == "Cancel Learn";
+    }));
 
     learn->triggerClick(); // press it again: Cancel
-    pumpMessages(200);
-    CHECK(editor->getStatusTextForTest().startsWith("Cancelled"));
-    CHECK(learn->getButtonText() == "Learn");
-    CHECK(learn->getTitle() == "Learn");
-    CHECK(proc.apvts.getRawParameterValue(ParamID::learn)->load() < 0.5f);
+    CHECK(pumpUntil([&] {
+        editor->refreshForTest();
+        return editor->getStatusTextForTest().startsWith("Cancelled") && learn->getButtonText() == "Learn" &&
+               learn->getTitle() == "Learn" && proc.apvts.getRawParameterValue(ParamID::learn)->load() < 0.5f;
+    }));
 
     feed((size_t) (1.5 * sr), signal.size());
+    // Negative check ("no late result" arrives): there is no state to wait for, so give a stray
+    // result ample time to land. It can only be a false pass under starvation, never a false fail.
     pumpMessages(400);
-    CHECK(editor->getStatusTextForTest().startsWith("Cancelled")); // no late result
+    editor->refreshForTest();
+    CHECK(editor->getStatusTextForTest().startsWith("Cancelled"));
     CHECK_FALSE(proc.isEngagedForTest());
 }
