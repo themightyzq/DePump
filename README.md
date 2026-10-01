@@ -8,10 +8,13 @@ with audible pumping.
 
 Three things ship: DePump.app, a standalone batch app and the main product;
 depump_render, a command-line renderer; and a VST3/AU plugin. The plugin
-has a Learn parameter: press it during playback to capture roughly 3 seconds
+has a Learn button: press it during playback to capture roughly 3 seconds
 of audio, analyze it off-thread, and if a pump is detected, fit and apply
 the model to freeRate, depth, attack, hold, release, and phase with no added
-latency. If no pump is detected, the plugin remains a pass-through.
+latency. If no pump is detected, the plugin remains a pass-through. The
+plugin window shows the Learn status as it goes (listening, analysing with a
+progress bar, learned, or the reason it failed). Learn is not automatable, so
+host automation cannot start it.
 
 ## Install
 
@@ -41,6 +44,17 @@ same recovery headlessly:
 ```
 depump_render --batch IN_DIR --out-dir OUT_DIR
 ```
+
+## Plugin behaviour
+
+- With Amount at 0 and Output at 0 dB, audio below -1 dBFS passes through
+  unchanged, bit for bit. A safety limiter only acts above -1 dBFS and keeps
+  the output under -0.3 dBFS.
+- When the host transport is stopped and keeps reporting the same position,
+  the correction runs on its own clock instead of restarting every block. A
+  host that reports no position is treated the same way.
+- The plugin window scales uniformly from 90 to 150 percent of its default
+  size.
 
 ## Build from source
 
@@ -78,5 +92,10 @@ sudo cp -R ~/Library/Audio/Plug-Ins/VST3/DePump.vst3 /Library/Audio/Plug-Ins/VST
 ## Licence
 
 GPL-3.0-or-later. See LICENSE. Built with JUCE.
+
+The window and app use the ZQ SFX house UI. It embeds three typefaces under
+the SIL Open Font License 1.1: Barlow Condensed, VT323 and IBM Plex Mono. The
+licence texts are in the licenses folder. The knob artwork is CC0 (KnobGallery,
+by SolurOathLabs, dh96 and C. Anders).
 
 ZQ SFX, https://www.zq-sfx.com, connect@zq-sfx.com.

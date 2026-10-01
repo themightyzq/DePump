@@ -87,7 +87,16 @@ CMakeLists.txt; spec in ../docs/ZQSFX_UI_STYLE_GUIDE.md). Rules specific to DePu
   application owns it ahead of the window so it outlives every component.
 - UI gate: `depump_ui_snapshot <out.png>` renders the window headlessly with one row per job
   state. Render before and after any UI change and compare.
-- The companion plugin still uses `GenericAudioProcessorEditor` (no custom editor yet).
+- The companion plugin has its own editor (`src/PluginEditor.cpp`) on the same house UI: the
+  eleven parameters through APVTS attachments, a Learn button and a status line fed by polling
+  `PluginLearnEngine` from a message-thread timer (no callback into the editor). It owns its
+  LookAndFeel (a shared instance, never the process default) and is drawn at 640 x 340 and
+  scaled uniformly (0.9x to 1.5x). Knob sliders are made keyboard-focusable explicitly,
+  because `zqsfx::ui::Knob` does not do it.
+- `learn` is meta and not automatable. The safety clip in `processBlock` is transparent up to
+  -1 dBFS. A host position that repeats block after block is treated as no position.
+- The three embedded typefaces are SIL OFL 1.1; their licence texts live in `licenses/` and are
+  credited in README.md.
 
 ## Definition of done (decided by owner, 2026-07-09)
 A change is done when: unit tests pass; pluginval at strictness 10

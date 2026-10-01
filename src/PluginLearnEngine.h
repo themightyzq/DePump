@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <functional>
@@ -71,11 +72,46 @@ public:
     void pushMonoSample(float sample) noexcept;
     bool isCaptureComplete() const noexcept { return captureComplete.load(); }
 
-    // --- Reporting (message thread; read status message only when
-    // getStatus() is idle/applied/noPumpDetected/error, i.e. not while the
-    // background thread may still be writing it) ---
+    // --- Reporting (message thread; the editor polls these) ---
     Status getStatus() const noexcept { return status.load(); }
-    juce::String getStatusMessage() const { return statusMessage; }
+
+    // A copy of the latest status text. Safe from any non-real-time thread at any time: the
+    // background thread and the message thread both write it, so it is guarded by a spin lock
+    // that the audio thread never takes.
+    juce::String getStatusMessage() const
+    {
+        const juce::SpinLock::ScopedLockType guard(messageLock);
+        return statusMessage;
+    }
+
+    // 0..1: how far the current phase has got. capturing: captured / needed samples.
+    // analyzing: the analyzer's coarse progress. idle: 0. A finished run (applied,
+    // noPumpDetected, error): 1. Lock-free, so it is safe to poll from a timer.
+    float getProgress() const noexcept
+    {
+        switch (status.load())
+        {
+            case Status::idle:
+                return 0.0f;
+            case Status::capturing:
+            {
+                const int needed = targetSamples.load();
+                return needed > 0 ? std::clamp(static_cast<float>(capturedCount.load()) / static_cast<float>(needed),
+                                               0.0f, 1.0f)
+                                  : 0.0f;
+            }
+            case Status::analyzing:
+                return std::clamp(analysisProgress.load(), 0.0f, 1.0f);
+            case Status::applied:
+            case Status::noPumpDetected:
+            case Status::error:
+                return 1.0f;
+        }
+        return 0.0f;
+    }
+
+    // How much audio a Learn listens to, in seconds.
+    double getCaptureSeconds() const noexcept { return captureSeconds; }
 
 private:
     void run() override;
@@ -83,6 +119,7 @@ private:
     void postToMessageThread(uint32_t startedGeneration, std::function<void()> work);
     void applyProfileOnMessageThread(const struct ClampedProfile& clamped);
     void resetLearnParameterOnMessageThread();
+    void setStatusMessage(const juce::String& text);
 
     juce::AudioProcessorValueTreeState& apvts;
     const double captureSeconds;
@@ -97,7 +134,9 @@ private:
     std::atomic<int> targetSamples{0};
 
     std::atomic<Status> status{Status::idle};
-    juce::String statusMessage; // background/message thread only, see getStatusMessage()
+    juce::String statusMessage; // guarded by messageLock; never touched on the audio thread
+    mutable juce::SpinLock messageLock;
+    std::atomic<float> analysisProgress{0.0f};
 
     // Liveness/cancellation for callAsync results: queued lambdas may run after
     // this engine is destroyed (alive expired/false) or after prepare()

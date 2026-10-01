@@ -54,6 +54,7 @@ juce_add_plugin(DePump
 target_sources(DePump PRIVATE
     src/PluginProcessor.cpp
     src/PluginLearnEngine.cpp
+    src/PluginEditor.cpp
 )
 
 target_include_directories(DePump PRIVATE src)
@@ -74,6 +75,7 @@ target_compile_definitions(DePump PUBLIC ${DEPUMP_HOST_COMPAT_DEFS})
 
 target_link_libraries(DePump
     PRIVATE
+        zqsfx::ui
         juce::juce_audio_utils
         juce::juce_dsp
     PUBLIC
@@ -178,8 +180,10 @@ target_sources(DePumpTests PRIVATE
     tests/AnalysisTests.cpp
     tests/RecoveryRobustnessTests.cpp
     tests/PluginDspTests.cpp
+    tests/EditorTests.cpp
     src/PluginProcessor.cpp
     src/PluginLearnEngine.cpp
+    src/PluginEditor.cpp
     ${DEPUMP_DSP_SOURCES}
 )
 
@@ -193,6 +197,7 @@ target_compile_definitions(DePumpTests PRIVATE ${DEPUMP_HOST_COMPAT_DEFS}
 
 target_link_libraries(DePumpTests
     PRIVATE
+        zqsfx::ui
         juce::juce_audio_utils
         juce::juce_dsp
         Catch2::Catch2WithMain

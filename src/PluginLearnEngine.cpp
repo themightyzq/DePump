@@ -69,9 +69,13 @@ PluginLearnEngine::PluginLearnEngine(juce::AudioProcessorValueTreeState& apvtsIn
 PluginLearnEngine::~PluginLearnEngine()
 {
     // Before stopThread: results already queued via callAsync must go inert.
+    // The generation bump also tells a running analysis to abandon its work (it polls
+    // generation and threadShouldExit() between candidate evaluations), so the join below
+    // is prompt. The long timeout is only a backstop: a forced kill of a thread that is
+    // mid-allocation is the failure we must never provoke.
     alive->store(false);
     generation.fetch_add(1);
-    stopThread(2000);
+    stopThread(10000);
 }
 
 void PluginLearnEngine::prepare(double sampleRateIn)
@@ -85,7 +89,7 @@ void PluginLearnEngine::prepare(double sampleRateIn)
     capturedCount.store(0);
     targetSamples.store(target);
     status.store(Status::idle);
-    statusMessage = "idle";
+    setStatusMessage("idle");
 
     // juce::AbstractFifo always reserves one slot (getFreeSpace() ==
     // bufferSize - numReady - 1), so a FIFO sized to exactly `target` can
@@ -154,8 +158,9 @@ void PluginLearnEngine::finishCaptureAndAnalyze()
         return;
 
     const uint32_t startedGeneration = generation.load();
+    analysisProgress.store(0.0f);
     status.store(Status::analyzing);
-    statusMessage = "analyzing..."; // background thread only: safe to allocate here
+    setStatusMessage("analyzing..."); // background thread only: safe to allocate here
 
     const int count = std::min(capturedCount.load(), targetSamples.load());
     std::vector<float> captured(static_cast<size_t>(std::max(0, count)));
@@ -173,14 +178,26 @@ void PluginLearnEngine::finishCaptureAndAnalyze()
 
     try
     {
-        const auto analysis = depump::analyzePump(captured, sampleRate);
-        if (generation.load() != startedGeneration)
-            return; // prepare()/destruction cancelled this run: publish nothing
+        depump::AnalysisControl control;
+        control.shouldCancel = [this, startedGeneration] {
+            return threadShouldExit() || generation.load() != startedGeneration;
+        };
+        control.onProgress = [this](float fraction) { analysisProgress.store(fraction); };
+
+        const auto analysis = depump::analyzePump(captured, sampleRate, &control);
+        if (analysis.cancelled || generation.load() != startedGeneration)
+        {
+            // prepare()/destruction cancelled this run: publish nothing. If prepare() reset
+            // the status to idle before this run flipped it to analyzing, put it back, or
+            // Learn would stay locked out ("busy") until the next prepare.
+            Status expected = Status::analyzing;
+            status.compare_exchange_strong(expected, Status::idle);
+            return;
+        }
         if (!analysis.pumpDetected || !analysis.modelFitted)
         {
-            statusMessage = analysis.pumpDetected
-                                ? "pump detected but no compressor-model fit; nothing applied"
-                                : "no pumping detected in the captured audio";
+            setStatusMessage(analysis.pumpDetected ? "pump detected but no compressor-model fit; nothing applied"
+                                                    : "no pumping detected in the captured audio");
             status.store(Status::noPumpDetected);
             postToMessageThread(startedGeneration, [this] { resetLearnParameterOnMessageThread(); });
             return;
@@ -193,7 +210,7 @@ void PluginLearnEngine::finishCaptureAndAnalyze()
     {
         if (generation.load() != startedGeneration)
             return;
-        statusMessage = juce::String("error: ") + e.what();
+        setStatusMessage(juce::String("error: ") + e.what());
         status.store(Status::error);
         postToMessageThread(startedGeneration, [this] { resetLearnParameterOnMessageThread(); });
     }
@@ -221,10 +238,21 @@ void PluginLearnEngine::applyProfileOnMessageThread(const ClampedProfile& clampe
     setNormalized(apvts, ParamID::release, clamped.releaseMs);
     setNormalized(apvts, ParamID::phase, clamped.phasePercent);
 
-    statusMessage = clamped.clampNote.isEmpty() ? juce::String("applied")
-                                                 : juce::String("applied (") + clamped.clampNote + ")";
+    juce::String summary;
+    summary << "learned: " << juce::String(clamped.freeRateHz, 2) << " Hz, depth " << juce::String(clamped.depthDb, 1)
+            << " dB, attack " << juce::String(clamped.attackMs, 1) << " ms, release "
+            << juce::String(juce::roundToInt(clamped.releaseMs)) << " ms";
+    if (clamped.clampNote.isNotEmpty())
+        summary << " (" << clamped.clampNote << ")";
+    setStatusMessage(summary);
     resetLearnParameterOnMessageThread();
     status.store(Status::applied);
+}
+
+void PluginLearnEngine::setStatusMessage(const juce::String& text)
+{
+    const juce::SpinLock::ScopedLockType guard(messageLock);
+    statusMessage = text;
 }
 
 void PluginLearnEngine::resetLearnParameterOnMessageThread()

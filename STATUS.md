@@ -28,11 +28,9 @@ Full report: ../docs/STATE_OF_THE_UNION_2026-09-29.md
 
 ### Open (see report backlog)
 
-- Always-on soft clip (about -0.7 dB at -6 dBFS peaks, even at Amount 0)
-- stopThread(2000) can force-kill a long analysis
-- Stopped-transport phase re-anchor can buzz
-- Learn param is automatable
-- Generic editor never shows Learn status
+- (fixed, uncommitted, see CHANGELOG.md Unreleased: soft clip transparent below -1 dBFS; analysis
+  cancels promptly and stopThread waits up to 10 s; frozen transport free-runs; learn not
+  automatable; custom editor with Learn status)
 - Audible check in a DAW (also real-host phase lock unverified)
 - Fitter can pick the wrong phase on an unlucky window (press Learn again)
 

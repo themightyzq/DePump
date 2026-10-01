@@ -3,12 +3,16 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cmath>
+#include <memory>
 #include <vector>
 
 #include "PluginProcessor.h"
 #include "dsp/Envelope.h"
 #include "dsp/GainCurve.h"
+#include "dsp/PumpAnalysis.h"
 #include "dsp/PumpProfile.h"
 
 namespace
@@ -41,12 +45,16 @@ std::vector<float> makePumped(const std::vector<float>& clean, const depump::Pum
 
 // Minimal AudioPlayHead stub: reports only a sample position, set by the
 // test between blocks, so the plugin's phase-lock path is exercised.
+// reportPosition = false models a host that gives no position at all.
 struct TestPlayHead : public juce::AudioPlayHead
 {
     int64_t sample = 0;
+    bool reportPosition = true;
 
     juce::Optional<PositionInfo> getPosition() const override
     {
+        if (!reportPosition)
+            return {};
         PositionInfo info;
         info.setTimeInSamples(sample);
         return info;
@@ -302,4 +310,329 @@ TEST_CASE("prepare() cancels an in-flight Learn result instead of applying it la
     CHECK(proc.getLearnEngineForTest().getStatus() == PluginLearnEngine::Status::idle);
     // The stale result would have reset the Learn parameter to 0.
     CHECK(proc.apvts.getRawParameterValue(ParamID::learn)->load() >= 0.5f);
+}
+
+// ---------------------------------------------------------------------------------------------
+// 2026-09-29 review backlog: safety clip, stopped transport, learn automation, thread exit.
+// ---------------------------------------------------------------------------------------------
+namespace
+{
+// Runs one block of `value`-filled mono samples; used to step the "engaged" detector.
+void processSilenceBlock(DePumpAudioProcessor& proc, int blockSize)
+{
+    juce::AudioBuffer<float> buffer(1, blockSize);
+    buffer.clear();
+    juce::MidiBuffer midi;
+    proc.processBlock(buffer, midi);
+}
+
+// Sets a parameter by its real (denormalised) value.
+void setParam(DePumpAudioProcessor& proc, const char* id, float value)
+{
+    auto* p = proc.apvts.getParameter(id);
+    REQUIRE(p != nullptr);
+    p->setValueNotifyingHost(p->convertTo0to1(value));
+}
+
+// Builds a processor that is engaged (applies its correction path) with the given Amount and
+// Output. Amount/Output are set BEFORE prepareToPlay so their smoothers start at the target.
+std::unique_ptr<DePumpAudioProcessor> makeEngagedProcessor(double sr, int blockSize, float amountPercent,
+                                                           float outputDb, TestPlayHead* playHead)
+{
+    auto proc = std::make_unique<DePumpAudioProcessor>();
+    if (playHead != nullptr)
+        proc->setPlayHead(playHead);
+    setParam(*proc, ParamID::amount, amountPercent);
+    setParam(*proc, ParamID::output, outputDb);
+    setParam(*proc, ParamID::syncMode, 1.0f); // Free
+    proc->setPlayConfigDetails(1, 1, sr, blockSize);
+    proc->prepareToPlay(sr, blockSize);
+
+    processSilenceBlock(*proc, blockSize);      // first block samples the "last seen" values
+    setParam(*proc, ParamID::depth, 12.0f);     // a model edit engages the correction
+    setParam(*proc, ParamID::freeRate, 4.0f);
+    processSilenceBlock(*proc, blockSize);
+    return proc;
+}
+} // namespace
+
+TEST_CASE("Safety clip is bit-transparent below -1 dBFS when no correction is applied")
+{
+    juce::ScopedJuceInitialiser_GUI juceInit;
+
+    for (double sr : {44100.0, 48000.0, 96000.0})
+    {
+        for (int blockSize : {64, 100, 1024})
+        {
+            INFO("sr=" << sr << " blockSize=" << blockSize);
+            TestPlayHead playHead;
+            auto proc = makeEngagedProcessor(sr, blockSize, 0.0f, 0.0f, &playHead);
+            REQUIRE(proc->isEngagedForTest());
+
+            // -6 dBFS sine: the old tanh clip turned this into about -6.4 dBFS.
+            std::vector<float> sine(static_cast<size_t>(sr));
+            for (size_t i = 0; i < sine.size(); ++i)
+                sine[i] = 0.5012f * std::sin(2.0f * 3.14159265f * 440.0f * static_cast<float>(i) / static_cast<float>(sr));
+
+            const auto out = runThroughProcessor(*proc, playHead, sine, blockSize);
+            float maxError = 0.0f;
+            for (size_t i = 0; i < sine.size(); ++i)
+                maxError = std::max(maxError, std::abs(out[i] - sine[i]));
+            CHECK(maxError < 1.0e-6f);
+        }
+    }
+}
+
+TEST_CASE("Safety clip still limits hot signals, monotonically and without a kink")
+{
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    constexpr double sr = 48000.0;
+    constexpr int blockSize = 512;
+    TestPlayHead playHead;
+    auto proc = makeEngagedProcessor(sr, blockSize, 0.0f, 0.0f, &playHead);
+
+    // A slow ramp through the knee and well past full scale, both signs.
+    constexpr int n = 4 * blockSize * 8;
+    std::vector<float> ramp(n);
+    for (int i = 0; i < n; ++i)
+        ramp[(size_t) i] = -1.5f + 3.0f * static_cast<float>(i) / static_cast<float>(n - 1);
+
+    const auto out = runThroughProcessor(*proc, playHead, ramp, blockSize);
+    constexpr float ceiling = 0.96605f;
+    float previous = out[0];
+    for (size_t i = 0; i < out.size(); ++i)
+    {
+        REQUIRE(std::isfinite(out[i]));
+        REQUIRE(std::abs(out[i]) <= ceiling);
+        if (std::abs(ramp[i]) <= 0.89f)
+            REQUIRE(out[i] == ramp[i]);
+        if (i > 0)
+        {
+            REQUIRE(out[i] >= previous);                                   // monotonic
+            REQUIRE(out[i] - previous <= (ramp[i] - ramp[i - 1]) * 1.001f + 1.0e-7f); // slope <= 1: no kink up
+        }
+        previous = out[i];
+    }
+    CHECK(out.back() > 0.95f); // it limits to the ceiling, it does not flatten early
+}
+
+TEST_CASE("A stopped transport (frozen host position) behaves like a host with no position")
+{
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    constexpr double sr = 48000.0;
+    constexpr int blockSize = 512;
+
+    // B: a stopped transport, reporting position 0 forever. A: a host that reports nothing,
+    // so the plugin free-runs. Before the fix B re-anchored the pump curve to position 0 every
+    // block (a block-rate buzz that never reaches the dip); A and B must now be identical.
+    TestPlayHead noPosition;
+    noPosition.reportPosition = false;
+    TestPlayHead stopped;
+    stopped.sample = 0;
+
+    auto a = makeEngagedProcessor(sr, blockSize, 100.0f, 0.0f, &noPosition);
+    auto b = makeEngagedProcessor(sr, blockSize, 100.0f, 0.0f, &stopped);
+
+    std::vector<float> tone(static_cast<size_t>(blockSize) * 64); // 0.68 s: several pump cycles
+    for (size_t i = 0; i < tone.size(); ++i)
+        tone[i] = 0.2f * std::sin(2.0f * 3.14159265f * 220.0f * static_cast<float>(i) / static_cast<float>(sr));
+
+    juce::MidiBuffer midi;
+    float maxDifference = 0.0f;
+    float maxCorrection = 0.0f;
+    for (size_t pos = 0; pos < tone.size(); pos += (size_t) blockSize)
+    {
+        juce::AudioBuffer<float> bufA(1, blockSize), bufB(1, blockSize);
+        for (int i = 0; i < blockSize; ++i)
+        {
+            bufA.setSample(0, i, tone[pos + (size_t) i]);
+            bufB.setSample(0, i, tone[pos + (size_t) i]);
+        }
+        a->processBlock(bufA, midi);
+        b->processBlock(bufB, midi); // stopped.sample stays 0: the host does not advance
+        for (int i = 0; i < blockSize; ++i)
+        {
+            maxDifference = std::max(maxDifference, std::abs(bufA.getSample(0, i) - bufB.getSample(0, i)));
+            maxCorrection = std::max(maxCorrection, std::abs(bufA.getSample(0, i) - tone[pos + (size_t) i]));
+        }
+    }
+    CHECK(maxCorrection > 0.05f); // the correction really was running in the free-running reference
+    CHECK(maxDifference == 0.0f);
+}
+
+TEST_CASE("A playing transport still phase-locks, and a seek re-anchors at once")
+{
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    constexpr double sr = 48000.0;
+    constexpr int blockSize = 512;
+
+    // Same fixture, two hosts: one plays on from 0, one jumps to a later position mid-stream.
+    // After the jump, the jumping host must equal a host that was simply there (timeline-locked).
+    TestPlayHead reference;
+    TestPlayHead jumping;
+    auto ref = makeEngagedProcessor(sr, blockSize, 100.0f, 0.0f, &reference);
+    auto jmp = makeEngagedProcessor(sr, blockSize, 100.0f, 0.0f, &jumping);
+
+    constexpr int64_t jumpTo = 7 * 4800 + 131;
+    std::vector<float> tone(static_cast<size_t>(blockSize) * 16);
+    for (size_t i = 0; i < tone.size(); ++i)
+        tone[i] = 0.2f * std::sin(2.0f * 3.14159265f * 220.0f * static_cast<float>(i) / static_cast<float>(sr));
+
+    juce::MidiBuffer midi;
+    reference.sample = jumpTo;
+    jumping.sample = 0;
+    float maxDifference = 0.0f;
+    for (size_t pos = 0; pos < tone.size(); pos += (size_t) blockSize)
+    {
+        if (pos == 4 * (size_t) blockSize)
+            jumping.sample = jumpTo + (int64_t) pos; // the seek: keep the two timelines equal from here
+        juce::AudioBuffer<float> r(1, blockSize), j(1, blockSize);
+        for (int i = 0; i < blockSize; ++i)
+        {
+            r.setSample(0, i, tone[pos + (size_t) i]);
+            j.setSample(0, i, tone[pos + (size_t) i]);
+        }
+        ref->processBlock(r, midi);
+        jmp->processBlock(j, midi);
+        reference.sample += blockSize;
+        jumping.sample += blockSize;
+        if (pos >= 6 * (size_t) blockSize) // one-pole settle after the jump
+            for (int i = 0; i < blockSize; ++i)
+                maxDifference = std::max(maxDifference, std::abs(r.getSample(0, i) - j.getSample(0, i)));
+    }
+    // The gain state of the two hosts differs only through the one-pole memory, which has
+    // settled by now; the timelines match, so the outputs must too.
+    CHECK(maxDifference < 0.02f);
+}
+
+TEST_CASE("The Learn parameter is not automatable; the model parameters are")
+{
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    DePumpAudioProcessor proc;
+
+    auto* learn = proc.apvts.getParameter(ParamID::learn);
+    REQUIRE(learn != nullptr);
+    CHECK_FALSE(learn->isAutomatable());
+    CHECK(learn->isMetaParameter());
+
+    for (auto* id : {ParamID::syncMode, ParamID::rate, ParamID::freeRate, ParamID::depth, ParamID::phase,
+                     ParamID::attack, ParamID::release, ParamID::amount, ParamID::output, ParamID::hold})
+    {
+        auto* p = proc.apvts.getParameter(id);
+        REQUIRE(p != nullptr);
+        CHECK(p->isAutomatable());
+    }
+}
+
+TEST_CASE("analyzePump reports progress and abandons promptly when cancelled")
+{
+    constexpr double sr = 48000.0;
+    const depump::PumpProfile profile{4.0f, 9.0f, 10.0f, 60.0f, 150.0f, 0.25f};
+    const auto pumped = makePumped(makeCleanChord(sr, 3.0), profile, sr);
+
+    // Uncancelled: progress never goes backwards and ends near the top.
+    {
+        std::vector<float> seen;
+        depump::AnalysisControl control;
+        control.onProgress = [&seen](float p) { seen.push_back(p); };
+        const auto analysis = depump::analyzePump(pumped, sr, &control);
+        CHECK_FALSE(analysis.cancelled);
+        REQUIRE(analysis.pumpDetected);
+        REQUIRE(seen.size() > 5);
+        CHECK(std::is_sorted(seen.begin(), seen.end()));
+        CHECK(seen.back() >= 0.9f);
+    }
+
+    // Cancelled after a handful of polls: it must stop, say so, and not run the fit to the end.
+    {
+        int polls = 0;
+        depump::AnalysisControl control;
+        control.shouldCancel = [&polls] { return ++polls > 20; };
+        const auto start = std::chrono::steady_clock::now();
+        const auto analysis = depump::analyzePump(pumped, sr, &control);
+        const auto ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+        CHECK(analysis.cancelled);
+        CHECK_FALSE(analysis.pumpDetected);
+        CHECK(polls <= 22); // no more than a candidate or two of overshoot
+        INFO("cancelled run took " << ms << " ms");
+    }
+}
+
+TEST_CASE("Destroying the processor in the middle of an analysis returns promptly and safely")
+{
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    constexpr double sr = 48000.0;
+    constexpr int blockSize = 512;
+
+    auto proc = std::make_unique<DePumpAudioProcessor>();
+    TestPlayHead playHead;
+    proc->setPlayHead(&playHead);
+    proc->setPlayConfigDetails(1, 1, sr, blockSize);
+    proc->prepareToPlay(sr, blockSize);
+
+    const depump::PumpProfile profile{4.0f, 9.0f, 10.0f, 60.0f, 150.0f, 0.25f};
+    const auto pumped = makePumped(makeCleanChord(sr, 6.0), profile, sr);
+
+    playHead.sample = 0;
+    proc->apvts.getParameter(ParamID::learn)->setValueNotifyingHost(1.0f);
+    runThroughProcessor(*proc, playHead, pumped, blockSize);
+
+    // Wait (without dispatching messages) until the background thread is analysing.
+    const auto deadline = juce::Time::getMillisecondCounter() + 10000u;
+    while (proc->getLearnEngineForTest().getStatus() != PluginLearnEngine::Status::analyzing &&
+           juce::Time::getMillisecondCounter() < deadline)
+        juce::Thread::sleep(1);
+    REQUIRE(proc->getLearnEngineForTest().getStatus() == PluginLearnEngine::Status::analyzing);
+    juce::Thread::sleep(50); // let it get properly into the fit
+
+    const auto start = std::chrono::steady_clock::now();
+    proc.reset(); // ~PluginLearnEngine joins the analysis thread
+    const auto ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    INFO("destruction took " << ms << " ms");
+    CHECK(ms < 500.0);
+
+    pumpMessageLoop(200); // the queued result, if any, must be inert
+    SUCCEED();
+}
+
+TEST_CASE("Learn reports capture progress and a readable result")
+{
+    juce::ScopedJuceInitialiser_GUI juceInit;
+    constexpr double sr = 48000.0;
+    constexpr int blockSize = 512;
+
+    DePumpAudioProcessor proc;
+    TestPlayHead playHead;
+    proc.setPlayHead(&playHead);
+    proc.setPlayConfigDetails(1, 1, sr, blockSize);
+    proc.prepareToPlay(sr, blockSize);
+    auto& engine = proc.getLearnEngineForTest();
+
+    CHECK(engine.getStatus() == PluginLearnEngine::Status::idle);
+    CHECK(engine.getProgress() == 0.0f);
+    CHECK(engine.getCaptureSeconds() == Catch::Approx(3.0));
+
+    const depump::PumpProfile profile{4.0f, 9.0f, 10.0f, 60.0f, 150.0f, 0.25f};
+    const auto pumped = makePumped(makeCleanChord(sr, 6.0), profile, sr);
+
+    playHead.sample = 0;
+    proc.apvts.getParameter(ParamID::learn)->setValueNotifyingHost(1.0f);
+    const std::vector<float> firstHalf(pumped.begin(), pumped.begin() + (long) (1.5 * sr));
+    runThroughProcessor(proc, playHead, firstHalf, blockSize);
+    CHECK(engine.getStatus() == PluginLearnEngine::Status::capturing);
+    CHECK(engine.getProgress() == Catch::Approx(0.5f).margin(0.02f));
+
+    const std::vector<float> rest(pumped.begin() + (long) (1.5 * sr), pumped.end());
+    auto status = feedWhileLearning(proc, playHead, rest, blockSize);
+    if (status != PluginLearnEngine::Status::applied)
+        status = waitForTerminalStatus(proc, 30000);
+    REQUIRE(status == PluginLearnEngine::Status::applied);
+    CHECK(engine.getProgress() == 1.0f);
+    const auto message = engine.getStatusMessage();
+    INFO("message: " << message);
+    CHECK(message.startsWith("learned:"));
+    CHECK(message.contains("Hz"));
+    // Whole milliseconds, not "141.779" (juce::String(x, 0) does not round).
+    CHECK(message.fromFirstOccurrenceOf("release ", false, false).upToFirstOccurrenceOf(" ms", false, false)
+              .containsOnly("0123456789"));
 }

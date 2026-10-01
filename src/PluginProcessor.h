@@ -64,6 +64,9 @@ public:
     bool isEngagedForTest() const noexcept { return engaged.load(); }
     PluginLearnEngine& getLearnEngineForTest() noexcept { return learnEngine; }
 
+    // Read-only view for the editor's status line (message thread).
+    const PluginLearnEngine& getLearnEngine() const noexcept { return learnEngine; }
+
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
     float computeRateHz(double bpm, float currentFreeRateHz) const noexcept;
@@ -74,6 +77,8 @@ private:
     // --- Real-time state (audio thread only unless noted) ---
     depump::GainOscillator oscillator;
     int64_t internalSampleCounter = 0; // fallback free-running clock when the host reports no position
+    int64_t lastHostSample = 0;        // previous block's host position, to spot a frozen (stopped) transport
+    bool haveLastHostSample = false;
 
     juce::SmoothedValue<float> amountSmoothed, outputSmoothed;
     juce::SmoothedValue<float> depthSmoothed, attackSmoothed, holdSmoothed, releaseSmoothed;

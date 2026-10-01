@@ -31,6 +31,19 @@ constexpr double detectConfidence = 0.5; // comb-verified autocorrelation floor
 constexpr float detectDepthDb = 1.0f;    // modulation floor worth fixing
 constexpr float maxCorrectionDb = 30.0f; // template clamp (safety)
 
+// Null-safe wrapper over the optional AnalysisControl hooks.
+struct Ctl
+{
+    const AnalysisControl* control = nullptr;
+
+    bool cancelled() const { return control != nullptr && control->shouldCancel && control->shouldCancel(); }
+    void progress(float fraction) const
+    {
+        if (control != nullptr && control->onProgress)
+            control->onProgress(fraction);
+    }
+};
+
 std::vector<double> detrend(const std::vector<EnvelopePoint>& envelope, double windowSec, double hopSec)
 {
     const size_t half = std::max<size_t>(1, static_cast<size_t>(windowSec / hopSec / 2.0));
@@ -424,8 +437,10 @@ double correctedEnvelopeRoughness(const std::vector<float>& monoSamples, double 
 // Joint polish of period + ALL model parameters against the corrected-audio
 // objective.
 void polishAlignment(const std::vector<float>& monoSamples, double sampleRate, PumpProfile& profile,
-                     double& periodSeconds)
+                     double& periodSeconds, const Ctl& ctl, float progressFrom, float progressTo)
 {
+    if (ctl.cancelled())
+        return;
     double best = correctedEnvelopeRoughness(monoSamples, sampleRate, profile, periodSeconds);
 
     struct Param
@@ -445,6 +460,7 @@ void polishAlignment(const std::vector<float>& monoSamples, double sampleRate, P
     constexpr int steps = 6;
     for (int round = 0; round < rounds; ++round)
     {
+        ctl.progress(progressFrom + (progressTo - progressFrom) * static_cast<float>(round) / rounds);
         const double shrink = std::pow(0.4, round);
 
         // Period: +-0.2% shrinking per round — wide enough to absorb any
@@ -454,6 +470,8 @@ void polishAlignment(const std::vector<float>& monoSamples, double sampleRate, P
             if (s == 0)
                 continue;
             const double candidate = periodSeconds * (1.0 + 0.002 * shrink * s / steps);
+            if (ctl.cancelled())
+                return;
             const double residual = correctedEnvelopeRoughness(monoSamples, sampleRate, profile, candidate);
             if (residual < best)
             {
@@ -475,6 +493,8 @@ void polishAlignment(const std::vector<float>& monoSamples, double sampleRate, P
                     value = static_cast<float>(std::fmod(static_cast<double>(value) + 1.0, 1.0));
                 candidate.*param.member = std::clamp(value, param.lo, param.hi);
 
+                if (ctl.cancelled())
+                    return;
                 const double residual =
                     correctedEnvelopeRoughness(monoSamples, sampleRate, candidate, periodSeconds);
                 if (residual < best)
@@ -491,7 +511,8 @@ void polishAlignment(const std::vector<float>& monoSamples, double sampleRate, P
 // dense sampling per round is reliable. Phase gets a full-range first round
 // (it is the most multimodal parameter).
 ModelFit fitPumpModel(const std::vector<float>& templateDb, double periodSeconds, double dipTimeSeconds,
-                      float depthDb, double windowMs, double hopMs)
+                      float depthDb, double windowMs, double hopMs, const Ctl& ctl, float progressFrom,
+                      float progressTo)
 {
     ModelFit fit;
     fit.profile.rateHz = static_cast<float>(1.0 / periodSeconds);
@@ -520,8 +541,11 @@ ModelFit fitPumpModel(const std::vector<float>& templateDb, double periodSeconds
     constexpr int samplesPerRound = 17;
     for (int round = 0; round < rounds; ++round)
     {
+        ctl.progress(progressFrom + (progressTo - progressFrom) * static_cast<float>(round) / rounds);
         for (const auto& param : params)
         {
+            if (ctl.cancelled())
+                return fit;
             const float current = fit.profile.*param.member;
             const float fullSpan = param.hi - param.lo;
             const float span = round == 0 ? fullSpan : fullSpan * std::pow(0.35f, static_cast<float>(round));
@@ -546,11 +570,22 @@ ModelFit fitPumpModel(const std::vector<float>& templateDb, double periodSeconds
 }
 } // namespace
 
-PumpAnalysis analyzePump(const std::vector<float>& samples, double sampleRate)
+PumpAnalysis analyzePump(const std::vector<float>& samples, double sampleRate, const AnalysisControl* control)
 {
     PumpAnalysis result;
     if (samples.empty() || sampleRate <= 0.0)
         return result;
+
+    const Ctl ctl{control};
+    // Cancellation is polled at every stage boundary and inside the two long fitting loops. A
+    // cancelled run returns at once with `cancelled` set; callers must discard it.
+    auto cancelledResult = [&result]() -> PumpAnalysis {
+        result.cancelled = true;
+        result.pumpDetected = false;
+        result.modelFitted = false;
+        return result;
+    };
+    ctl.progress(0.0f);
 
     const auto detectionEnv = extractRmsEnvelopeDb(samples, sampleRate, detectionWindowMs, analysisHopMs);
     if (detectionEnv.size() < 2)
@@ -567,6 +602,9 @@ PumpAnalysis analyzePump(const std::vector<float>& samples, double sampleRate)
     result.confidence = period.confidence;
     if (period.lagHops <= 0.0)
         return result;
+    if (ctl.cancelled())
+        return cancelledResult();
+    ctl.progress(0.05f);
 
     const double refinedHops = refinePeriodByFolding(detrended, hopSec, period.lagHops, 0.01);
     result.periodSeconds = refinedHops * hopSec;
@@ -580,6 +618,9 @@ PumpAnalysis analyzePump(const std::vector<float>& samples, double sampleRate)
     result.pumpDetected = result.confidence >= detectConfidence && detectionDepth >= detectDepthDb;
     if (!result.pumpDetected)
         return result;
+    if (ctl.cancelled())
+        return cancelledResult();
+    ctl.progress(0.10f);
 
     const auto templateEnv = extractRmsEnvelopeDb(samples, sampleRate, templateWindowMs, analysisHopMs);
     result.templateGainDb = foldTemplate(templateEnv, templateWindowMs, result.periodSeconds, numBins);
@@ -598,7 +639,10 @@ PumpAnalysis analyzePump(const std::vector<float>& samples, double sampleRate)
     // stands (non-compressor pump shapes).
     constexpr double acceptFitRmsDb = 0.6;
     const auto fit = fitPumpModel(result.templateGainDb, result.periodSeconds, result.dipTimeSeconds,
-                                  result.depthDb, templateWindowMs, analysisHopMs);
+                                  result.depthDb, templateWindowMs, analysisHopMs, ctl, 0.10f, 0.25f);
+    if (ctl.cancelled())
+        return cancelledResult();
+    ctl.progress(0.25f);
     if (fit.residualRmsDb <= acceptFitRmsDb)
     {
         result.modelFitted = true;
@@ -614,12 +658,19 @@ PumpAnalysis analyzePump(const std::vector<float>& samples, double sampleRate)
         double bestResidual = 1.0e9;
         auto bestProfile = result.fittedProfile;
         double bestPeriod = result.periodSeconds;
+        int startIndex = 0;
         for (float depthScale : {1.0f, 1.4f, 2.0f})
         {
             auto candidate = result.fittedProfile;
             candidate.depthDb = std::clamp(candidate.depthDb * depthScale, 1.0f, 30.0f);
             double candidatePeriod = result.periodSeconds;
-            polishAlignment(samples, sampleRate, candidate, candidatePeriod);
+            // The three multi-starts share the 0.25..0.95 span of the progress bar.
+            const float from = 0.25f + 0.70f * static_cast<float>(startIndex) / 3.0f;
+            const float to = 0.25f + 0.70f * static_cast<float>(startIndex + 1) / 3.0f;
+            ++startIndex;
+            polishAlignment(samples, sampleRate, candidate, candidatePeriod, ctl, from, to);
+            if (ctl.cancelled())
+                return cancelledResult();
             const double residual =
                 correctedEnvelopeRoughness(samples, sampleRate, candidate, candidatePeriod);
             if (residual < bestResidual)
@@ -629,6 +680,7 @@ PumpAnalysis analyzePump(const std::vector<float>& samples, double sampleRate)
                 bestPeriod = candidatePeriod;
             }
         }
+        ctl.progress(0.95f);
         result.fittedProfile = bestProfile;
         result.periodSeconds = bestPeriod;
         result.fittedProfile.rateHz = static_cast<float>(1.0 / result.periodSeconds);

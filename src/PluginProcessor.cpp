@@ -1,5 +1,7 @@
 #include "PluginProcessor.h"
 
+#include "PluginEditor.h"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -107,7 +109,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout DePumpAudioProcessor::create
         AudioParameterFloatAttributes().withLabel("ms")));
     layout.add(std::make_unique<AudioParameterBool>(
         ParameterID{ParamID::learn, 1}, "Learn", false,
-        AudioParameterBoolAttributes().withMeta(true)));
+        // Meta and NOT automatable: pressing it starts a capture and an analysis, which host
+        // automation (or a host's "touch/latch" replay) must never be able to fire.
+        AudioParameterBoolAttributes().withMeta(true).withAutomatable(false)));
 
     return layout;
 }
@@ -128,11 +132,21 @@ float DePumpAudioProcessor::computeRateHz(double bpm, float currentFreeRateHz) c
 
 float DePumpAudioProcessor::softClip(float x) noexcept
 {
-    // tanh soft clip asymptotic to -0.3 dBFS (10^(-0.3/20) ~= 0.96605):
-    // allocation-free, bounded cost, leaves signals well under the ceiling
-    // untouched to numeric precision (tanh(z) ~= z for small z).
+    // Safety limiter on the corrected signal. It is exactly transparent up to -1 dBFS
+    // (10^(-1/20) ~= 0.89125): samples at or below the threshold come back bit-identical, so
+    // normal-level audio is untouched whatever the correction does. Above the threshold a tanh
+    // knee takes over, with the same slope as the straight line at the join (no kink), and
+    // approaches -0.3 dBFS (10^(-0.3/20) ~= 0.96605) without ever reaching it.
+    // Allocation-free, bounded cost.
+    constexpr float threshold = 0.89125f;
     constexpr float ceiling = 0.96605f;
-    return ceiling * std::tanh(x / ceiling);
+    constexpr float headroom = ceiling - threshold;
+
+    const float magnitude = std::abs(x);
+    if (!(magnitude > threshold)) // also passes NaN through untouched, as before the knee
+        return x;
+    const float shaped = threshold + headroom * std::tanh((magnitude - threshold) / headroom);
+    return std::copysign(shaped, x);
 }
 
 void DePumpAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
@@ -143,6 +157,7 @@ void DePumpAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     preparedSampleRate = sampleRate;
 
     internalSampleCounter = 0;
+    haveLastHostSample = false;
     oscillator.reset(sampleRate);
 
     amountSmoothed.reset(sampleRate, smoothingRampSeconds);
@@ -209,6 +224,34 @@ void DePumpAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
                     bpm = *bpmOpt;
         }
     }
+
+    // A stopped transport keeps reporting the SAME position block after block. Re-anchoring the
+    // oscillator to it each time would replay one block's worth of pump curve over and over: a
+    // buzz at the block rate, and a held boost when that spot lies inside a dip. A position
+    // identical to the previous block's cannot be playback (playback always advances), so treat
+    // it as "no usable position": the oscillator then free-runs on its own clock, exactly like
+    // a host that gives no position at all (the Free-mode case). The first block after the
+    // transport moves again re-anchors to the host. Seeks and loops change the position, so
+    // they still re-anchor immediately.
+    if (numSamples > 0)
+    {
+        if (havePosition)
+        {
+            const bool frozen = haveLastHostSample && timelineSample == lastHostSample;
+            lastHostSample = timelineSample;
+            haveLastHostSample = true;
+            if (frozen)
+            {
+                havePosition = false;
+                timelineSample = internalSampleCounter;
+            }
+        }
+        else
+        {
+            haveLastHostSample = false;
+        }
+    }
+
     internalSampleCounter = havePosition ? timelineSample + numSamples : internalSampleCounter + numSamples;
     oscillator.setPhaseReferenceSample(timelineSample - captureStartSample.load());
 
@@ -331,7 +374,7 @@ void DePumpAudioProcessor::processBlockBypassed(juce::AudioBuffer<float>& buffer
 
 juce::AudioProcessorEditor* DePumpAudioProcessor::createEditor()
 {
-    return new juce::GenericAudioProcessorEditor(*this);
+    return new DePumpAudioProcessorEditor(*this);
 }
 
 void DePumpAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
