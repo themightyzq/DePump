@@ -244,9 +244,6 @@ public:
 
         for (auto* knob : allKnobs())
         {
-            // A rotary slider does not take keyboard focus by default; without this the focus
-            // ring never reaches the knobs and they cannot be set from the keyboard.
-            knob->slider.setWantsKeyboardFocus(true);
             // The value box is an editable control (click to type a value), so it gets a real hit
             // target: the module's default is 16 px tall, under the 22 px floor, and the editor can
             // be scaled down to 0.9x, so draw it 25 px tall.

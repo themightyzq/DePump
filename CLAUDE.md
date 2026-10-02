@@ -91,8 +91,9 @@ CMakeLists.txt; spec in ../docs/ZQSFX_UI_STYLE_GUIDE.md). Rules specific to DePu
   eleven parameters through APVTS attachments, a Learn button and a status line fed by polling
   `PluginLearnEngine` from a message-thread timer (no callback into the editor). It owns its
   LookAndFeel (a shared instance, never the process default) and is drawn at 640 x 340 and
-  scaled uniformly (0.9x to 1.5x). Knob sliders are made keyboard-focusable explicitly,
-  because `zqsfx::ui::Knob` does not do it.
+  scaled uniformly (0.9x to 1.5x). The knobs are `zqsfx::ui::Knob`, whose dial takes keyboard
+  focus (arrow keys, Shift+arrow for a fine step) and returns to the parameter default on
+  double-click; the editor sets none of that itself, and `tests/EditorTests.cpp` checks it.
 - `learn` is meta and not automatable. The safety clip in `processBlock` is transparent up to
   -1 dBFS. A host position that repeats block after block is treated as no position.
 - The three embedded typefaces are SIL OFL 1.1; their licence texts live in `licenses/`, are

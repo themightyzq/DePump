@@ -1,8 +1,10 @@
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <cmath>
 #include <functional>
 #include <memory>
+#include <set>
 
 #include <zqsfx_ui/zqsfx_ui.h>
 
@@ -134,6 +136,80 @@ TEST_CASE("Editor: every control is named, described, focusable and at least 22 
         });
         CHECK(valueBoxes == 8);
     }
+}
+
+TEST_CASE("Editor: every parameter-bound slider is a house Dial that takes keys and resets on double-click")
+{
+    juce::ScopedJuceInitialiser_GUI juceInit;
+
+    // Free Rate is dimmed (and ignores keys and clicks) in Sync mode, so the live checks run in
+    // both modes and every knob must be live in one of them.
+    std::set<juce::String> liveChecked;
+    for (bool freeMode : {false, true})
+    {
+        DePumpAudioProcessor proc;
+
+        // The sliders have no public link to their parameters, so put every parameter on its
+        // default before the editor is built: each slider's value then is the default a
+        // double-click must restore.
+        for (auto* prm : proc.getParameters())
+            if (auto* ranged = dynamic_cast<juce::RangedAudioParameter*>(prm))
+                ranged->setValueNotifyingHost(ranged->getDefaultValue());
+        proc.apvts.getParameter(ParamID::syncMode)->setValueNotifyingHost(freeMode ? 1.0f : 0.0f);
+
+        std::unique_ptr<juce::AudioProcessorEditor> editor(proc.createEditor());
+        REQUIRE(editor != nullptr);
+
+        std::vector<juce::Slider*> sliders;
+        forEachDescendant(*editor, [&](juce::Component& c) {
+            if (auto* s = dynamic_cast<juce::Slider*>(&c))
+                sliders.push_back(s);
+        });
+        REQUIRE(sliders.size() == 8); // the eight knobs
+
+        std::vector<double> defaults;
+        for (auto* s : sliders)
+            defaults.push_back(s->getValue());
+
+        for (size_t i = 0; i < sliders.size(); ++i)
+        {
+            auto* s = sliders[i];
+            INFO((freeMode ? "Free" : "Sync") << " mode, slider '" << s->getTitle() << "'");
+            CHECK(dynamic_cast<ui::Dial*>(s) != nullptr);
+            CHECK(s->getWantsKeyboardFocus());
+            REQUIRE(s->isDoubleClickReturnEnabled());
+            CHECK(s->getDoubleClickReturnValue() == Catch::Approx(defaults[i]).margin(1.0e-4));
+            if (!s->isEnabled())
+                continue;
+            liveChecked.insert(s->getTitle());
+
+            // Arrow keys move the value; Shift+arrow moves a continuous slider by a tenth of that.
+            const double mid = s->getMinimum() + 0.4 * (s->getMaximum() - s->getMinimum());
+            s->setValue(mid, juce::dontSendNotification);
+            s->keyPressed(juce::KeyPress(juce::KeyPress::rightKey));
+            const double plainStep = s->getValue() - mid;
+            CHECK(plainStep > 0.0);
+            // Shift+arrow is the Dial's fine step: a plain slider does not handle it at all. A slider
+            // quantised to an interval snaps a tenth of a step back, so only a continuous one moves.
+            s->setValue(mid, juce::dontSendNotification);
+            CHECK(s->keyPressed(juce::KeyPress(juce::KeyPress::rightKey, juce::ModifierKeys::shiftModifier, 0)));
+            if (s->getInterval() == 0.0)
+            {
+                const double fineStep = s->getValue() - mid;
+                CHECK(fineStep > 0.05 * plainStep);
+                CHECK(fineStep < 0.2 * plainStep);
+            }
+
+            // A real double-click from a non-default value lands on the default.
+            s->setValue(mid, juce::dontSendNotification);
+            const auto now = juce::Time::getCurrentTime();
+            s->mouseDoubleClick(juce::MouseEvent(juce::Desktop::getInstance().getMainMouseSource(),
+                                                 juce::Point<float>(), juce::ModifierKeys(), 1.0f, 0.0f, 0.0f, 0.0f,
+                                                 0.0f, s, s, now, juce::Point<float>(), now, 2, false));
+            CHECK(s->getValue() == Catch::Approx(defaults[i]).margin(1.0e-4));
+        }
+    }
+    CHECK(liveChecked.size() == 8);
 }
 
 TEST_CASE("Editor: knob readouts show real units, whole numbers where the parameter is whole")

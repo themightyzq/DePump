@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Plugin: zqsfx_ui moves from v0.2.1 to v0.5.0. Every knob takes keyboard focus (arrow keys,
+  Shift+arrow for a fine step) and double-click returns it to the parameter default; the editor
+  no longer sets keyboard focus on the knobs itself, and a test covers all of it.
+
 ## 0.2.0 - 2026-10-01
 
 ### Changed (audible)
